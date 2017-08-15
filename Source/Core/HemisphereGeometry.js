@@ -346,10 +346,10 @@ define([
                 count.push(8,0,9);
             }
         }
-        console.log(positions.length);
-        console.log(positions);
-        console.log(count.length);
-        console.log(count);
+        // console.log(positions.length);
+        // console.log(positions);
+        // console.log(count.length);
+        // console.log(count);
         var attributes = new GeometryAttributes();
 
         if (vertexFormat.position) {
@@ -432,8 +432,8 @@ define([
                 indices[indexI++] = (first + 1);
             }
         }
-        console.log(count2);
-        console.log(indices);
+        // console.log(count2);
+        // console.log(indices);
         return new Geometry({
             attributes : attributes,
             indices : indices,
