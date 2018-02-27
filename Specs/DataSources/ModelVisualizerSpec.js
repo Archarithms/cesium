@@ -1,12 +1,15 @@
-/*global defineSuite*/
 defineSuite([
         'DataSources/ModelVisualizer',
         'Core/BoundingSphere',
         'Core/Cartesian3',
+        'Core/ClippingPlaneCollection',
+        'Core/defined',
         'Core/DistanceDisplayCondition',
         'Core/JulianDate',
         'Core/Matrix4',
+        'Core/Plane',
         'Core/Quaternion',
+        'Core/Resource',
         'Core/Transforms',
         'DataSources/BoundingSphereState',
         'DataSources/ConstantPositionProperty',
@@ -21,10 +24,14 @@ defineSuite([
         ModelVisualizer,
         BoundingSphere,
         Cartesian3,
+        ClippingPlaneCollection,
+        defined,
         DistanceDisplayCondition,
         JulianDate,
         Matrix4,
+        Plane,
         Quaternion,
+        Resource,
         Transforms,
         BoundingSphereState,
         ConstantPositionProperty,
@@ -52,7 +59,9 @@ defineSuite([
     });
 
     afterEach(function() {
-        visualizer = visualizer && visualizer.destroy();
+        if (defined(visualizer)) {
+            visualizer = visualizer.destroy();
+        }
     });
 
     it('constructor throws if no scene is passed.', function() {
@@ -80,10 +89,11 @@ defineSuite([
 
     it('removes the listener from the entity collection when destroyed', function() {
         var entityCollection = new EntityCollection();
-        var visualizer = new ModelVisualizer(scene, entityCollection);
+        visualizer = new ModelVisualizer(scene, entityCollection);
         expect(entityCollection.collectionChanged.numberOfListeners).toEqual(1);
-        visualizer = visualizer.destroy();
+        visualizer.destroy();
         expect(entityCollection.collectionChanged.numberOfListeners).toEqual(0);
+        visualizer = undefined;
     });
 
     it('object with no model does not create one.', function() {
@@ -132,6 +142,13 @@ defineSuite([
         };
         model.nodeTransformations = nodeTransforms;
 
+        var clippingPlanes = new ClippingPlaneCollection({
+            planes: [
+                new Plane(Cartesian3.UNIT_X, 0.0)
+            ]
+        });
+        model.clippingPlanes = new ConstantProperty(clippingPlanes);
+
         var testObject = entityCollection.getOrCreateEntity('test');
         testObject.position = new ConstantPositionProperty(Cartesian3.fromDegrees(1, 2, 3));
         testObject.model = model;
@@ -147,6 +164,7 @@ defineSuite([
         expect(primitive.minimumPixelSize).toEqual(24.0);
         expect(primitive.modelMatrix).toEqual(Transforms.eastNorthUpToFixedFrame(Cartesian3.fromDegrees(1, 2, 3), scene.globe.ellipsoid));
         expect(primitive.distanceDisplayCondition).toEqual(new DistanceDisplayCondition(10.0, 100.0));
+        expect(primitive.clippingPlanes._planes).toEqual(clippingPlanes._planes);
 
         // wait till the model is loaded before we can check node transformations
         return pollToPromise(function() {
@@ -160,6 +178,39 @@ defineSuite([
 
             var transformationMatrix = Matrix4.fromTranslationQuaternionRotationScale(translation, rotation, scale);
             expect(node.matrix).toEqual(transformationMatrix);
+        });
+    });
+
+    it('A ModelGraphics with a Resource causes a primitive to be created.', function() {
+        var time = JulianDate.now();
+        var entityCollection = new EntityCollection();
+        visualizer = new ModelVisualizer(scene, entityCollection);
+
+        var model = new ModelGraphics();
+        model.show = new ConstantProperty(true);
+        model.uri = new ConstantProperty(new Resource({
+            url: boxUrl
+        }));
+
+        var testObject = entityCollection.getOrCreateEntity('test');
+        testObject.position = new ConstantPositionProperty(Cartesian3.fromDegrees(1, 2, 3));
+        testObject.model = model;
+
+        visualizer.update(time);
+
+        expect(scene.primitives.length).toEqual(1);
+
+        var primitive = scene.primitives.get(0);
+
+        // wait till the model is loaded before we can check node transformations
+        return pollToPromise(function() {
+            scene.render();
+            return primitive.ready;
+        }).then(function() {
+            visualizer.update(time);
+
+            var node = primitive.getNode('Mesh');
+            expect(node).toBeDefined();
         });
     });
 

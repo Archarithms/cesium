@@ -1,4 +1,3 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/LabelCollection',
         'Core/BoundingRectangle',
@@ -100,6 +99,7 @@ defineSuite([
         expect(label.pixelOffsetScaleByDistance).not.toBeDefined();
         expect(label.scaleByDistance).not.toBeDefined();
         expect(label.distanceDisplayCondition).not.toBeDefined();
+        expect(label.disableDepthTestDistance).toEqual(0.0);
     });
 
     it('can add a label with specified values', function() {
@@ -134,6 +134,7 @@ defineSuite([
         var pixelOffsetScale = new NearFarScalar(1.0e4, 1.0, 1.0e6, 0.0);
         var scaleByDistance = new NearFarScalar(1.0e4, 1.0, 1.0e6, 0.0);
         var distanceDisplayCondition = new DistanceDisplayCondition(10.0, 100.0);
+        var disableDepthTestDistance = 10.0;
         var label = labels.add({
             show : show,
             position : position,
@@ -155,7 +156,8 @@ defineSuite([
             translucencyByDistance : translucency,
             pixelOffsetScaleByDistance : pixelOffsetScale,
             scaleByDistance : scaleByDistance,
-            distanceDisplayCondition : distanceDisplayCondition
+            distanceDisplayCondition : distanceDisplayCondition,
+            disableDepthTestDistance : disableDepthTestDistance
         });
 
         expect(label.show).toEqual(show);
@@ -179,6 +181,7 @@ defineSuite([
         expect(label.pixelOffsetScaleByDistance).toEqual(pixelOffsetScale);
         expect(label.scaleByDistance).toEqual(scaleByDistance);
         expect(label.distanceDisplayCondition).toEqual(distanceDisplayCondition);
+        expect(label.disableDepthTestDistance).toEqual(disableDepthTestDistance);
     });
 
     it('can specify font using units other than pixels', function() {
@@ -672,6 +675,43 @@ defineSuite([
         var dc = new DistanceDisplayCondition(100.0, 10.0);
         expect(function() {
             l.distanceDisplayCondition = dc;
+        }).toThrowDeveloperError();
+    });
+
+    it('renders with disableDepthTestDistance', function() {
+        var l = labels.add({
+            position : new Cartesian3(-1.0, 0.0, 0.0),
+            text : solidBox,
+            fillColor : Color.LIME,
+            horizontalOrigin : HorizontalOrigin.CENTER,
+            verticalOrigin : VerticalOrigin.CENTER
+        });
+        labels.add({
+            position : Cartesian3.ZERO,
+            text : solidBox,
+            fillColor : Color.BLUE,
+            horizontalOrigin : HorizontalOrigin.CENTER,
+            verticalOrigin : VerticalOrigin.CENTER
+        });
+
+        expect(scene).toRender([0, 0, 255, 255]);
+
+        l.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+        expect(scene).toRender([0, 255, 0, 255]);
+    });
+
+    it('throws with new label with disableDepthTestDistance less than 0.0', function() {
+        expect(function() {
+            labels.add({
+                disableDepthTestDistance : -1.0
+            });
+        }).toThrowDeveloperError();
+    });
+
+    it('throws with disableDepthTestDistance set less than 0.0', function() {
+        var l = labels.add();
+        expect(function() {
+            l.disableDepthTestDistance = -1.0;
         }).toThrowDeveloperError();
     });
 
@@ -1786,7 +1826,7 @@ defineSuite([
 
         it('should increase label height and decrease width when adding newlines', function() {
             var label = labels.add({
-                text : 'apl apl apl',
+                text : 'apl apl apl'
             });
             scene.renderForSpecs();
 
@@ -1800,7 +1840,145 @@ defineSuite([
             expect(newlinesBbox.height).toBeGreaterThan(originalBbox.height);
         });
 
+        it('should not modify text when rightToLeft is false', function() {
+            var text = 'bla bla bla';
+            var label = labels.add({
+                text : text
+            });
+            scene.renderForSpecs();
+
+            expect(label.text).toEqual(text);
+        });
+
     }, 'WebGL');
+
+    describe('right to left detection', function() {
+        beforeAll(function() {
+            Label.enableRightToLeftDetection = true;
+        });
+
+        afterAll(function() {
+            Label.enableRightToLeftDetection = false;
+        });
+
+        it('should not modify text when rightToLeft is true and there are no RTL characters', function() {
+            var text = 'bla bla bla';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+        });
+
+        it('should reverse text when there are only hebrew characters and rightToLeft is true', function() {
+            var text = 'שלום';
+            var expectedText = 'םולש';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('should reverse text when there are only arabic characters and rightToLeft is true', function() {
+            var text = 'مرحبا';
+            var expectedText = 'ابحرم';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('should reverse part of text when there is mix of right-to-left and other kind of characters and rightToLeft is true', function() {
+            var text = 'Master (אדון): "Hello"\nתלמיד (student): "שלום"';
+            var expectedText = 'Master (ןודא): "Hello"\n"םולש" :(student) דימלת';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('should reverse all text and replace brackets when there is right-to-left characters and rightToLeft is true', function() {
+            var text = 'משפט [מורכב] {עם} תווים <מיוחדים special>';
+            var expectedText = '<special םידחוימ> םיוות {םע} [בכרומ] טפשמ';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('should reverse only text that detected as rtl text when it begin with non rtl characters when rightToLeft is true', function() {
+            var text = '(interesting sentence with hebrew characters) שלום(עליך)חביבי.';
+            var expectedText = '(interesting sentence with hebrew characters) יביבח(ךילע)םולש.';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('should not change nothing if it only non alphanumeric characters when rightToLeft is true', function() {
+            var text = '([{- -}])';
+            var expectedText = '([{- -}])';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(expectedText);
+        });
+
+        it('detects characters in the range \\u05D0-\\u05EA', function() {
+            var text = '\u05D1\u05D2';
+            var expectedText = '\u05D2\u05D1';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('detects characters in the range \\u0600-\\u06FF', function() {
+            var text = '\u0601\u0602';
+            var expectedText = '\u0602\u0601';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('detects characters in the range \\u0750-\\u077F', function() {
+            var text = '\u0751\u0752';
+            var expectedText = '\u0752\u0751';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+
+        it('detects characters in the range \\u08A0-\\u08FF', function() {
+            var text = '\u08A1\u08A2';
+            var expectedText = '\u08A2\u08A1';
+            var label = labels.add({
+                text : text
+            });
+
+            expect(label.text).toEqual(text);
+            expect(label._renderedText).toEqual(expectedText);
+        });
+    });
 
     it('computes bounding sphere in 3D', function() {
         var one = labels.add({
@@ -2169,6 +2347,40 @@ defineSuite([
             scene.globe.callback(Cartesian3.fromDegrees(-72.0, 40.0, 100.0));
             cartographic = scene.globe.ellipsoid.cartesianToCartographic(l._clampedPosition);
             expect(cartographic.height).toEqualEpsilon(100.0, CesiumMath.EPSILON9);
+        });
+
+        it('resets the clamped position when HeightReference.NONE', function() {
+            scene.globe = createGlobe();
+            spyOn(scene.camera, 'update');
+            var l = labelsWithHeight.add({
+                heightReference : HeightReference.CLAMP_TO_GROUND,
+                text: 't',
+                position : Cartesian3.fromDegrees(-72.0, 40.0)
+            });
+            scene.renderForSpecs();
+            expect(l._clampedPosition).toBeDefined();
+            expect(l._glyphs[0].billboard._clampedPosition).toBeDefined();
+
+            l.heightReference = HeightReference.NONE;
+            expect(l._clampedPosition).toBeUndefined();
+            expect(l._glyphs[0].billboard._clampedPosition).toBeUndefined();
+        });
+
+        it('clears the billboard height reference callback when the label is removed', function() {
+            scene.globe = createGlobe();
+            spyOn(scene.camera, 'update');
+            var l = labelsWithHeight.add({
+                heightReference : HeightReference.CLAMP_TO_GROUND,
+                text: 't',
+                position : Cartesian3.fromDegrees(-72.0, 40.0)
+            });
+            scene.renderForSpecs();
+            var billboard = l._glyphs[0].billboard;
+            expect(billboard._removeCallbackFunc).toBeDefined();
+            var spy = spyOn(billboard, '_removeCallbackFunc');
+            labelsWithHeight.remove(l);
+            expect(spy).toHaveBeenCalled();
+            expect(labelsWithHeight._spareBillboards[0]._removeCallbackFunc).not.toBeDefined();
         });
     });
 

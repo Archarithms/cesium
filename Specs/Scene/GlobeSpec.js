@@ -1,8 +1,6 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/Globe',
         'Core/CesiumTerrainProvider',
-        'Core/defined',
         'Core/loadWithXhr',
         'Core/Rectangle',
         'Scene/SingleTileImageryProvider',
@@ -11,7 +9,6 @@ defineSuite([
     ], function(
         Globe,
         CesiumTerrainProvider,
-        defined,
         loadWithXhr,
         Rectangle,
         SingleTileImageryProvider,
@@ -99,6 +96,41 @@ defineSuite([
             expect(scene).toRender([0, 0, 0, 255]);
             scene.globe.show = true;
             expect(scene).notToRender([0, 0, 0, 255]);
+        });
+    });
+
+    it('ImageryLayersUpdated event fires when layer is added, hidden, shown, moved, or removed', function() {
+        var timesEventRaised = 0;
+        globe.imageryLayersUpdatedEvent.addEventListener(function () {
+            ++timesEventRaised;
+        });
+
+        var layerCollection = globe.imageryLayers;
+        layerCollection.removeAll();
+        var layer = layerCollection.addImageryProvider(new SingleTileImageryProvider({url : 'Data/Images/Red16x16.png'}));
+        layerCollection.addImageryProvider(new SingleTileImageryProvider({url : 'Data/Images/Red16x16.png'}));
+        return updateUntilDone(globe).then(function() {
+            expect(timesEventRaised).toEqual(2);
+
+            layer.show = false;
+            return updateUntilDone(globe);
+        }).then(function () {
+            expect(timesEventRaised).toEqual(3);
+
+            layer.show = true;
+            return updateUntilDone(globe);
+        }).then(function () {
+            expect(timesEventRaised).toEqual(4);
+
+            layerCollection.raise(layer);
+            return updateUntilDone(globe);
+        }).then(function () {
+            expect(timesEventRaised).toEqual(5);
+
+            layerCollection.remove(layer);
+            return updateUntilDone(globe);
+        }).then(function () {
+            expect(timesEventRaised).toEqual(6);
         });
     });
 

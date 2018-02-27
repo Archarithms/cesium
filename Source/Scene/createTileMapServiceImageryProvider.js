@@ -1,14 +1,13 @@
-/*global define*/
 define([
         '../Core/Cartesian2',
         '../Core/Cartographic',
         '../Core/defaultValue',
         '../Core/defined',
+        '../Core/deprecationWarning',
         '../Core/DeveloperError',
         '../Core/GeographicTilingScheme',
-        '../Core/joinUrls',
-        '../Core/loadXML',
         '../Core/Rectangle',
+        '../Core/Resource',
         '../Core/RuntimeError',
         '../Core/TileProviderError',
         '../Core/WebMercatorTilingScheme',
@@ -19,11 +18,11 @@ define([
         Cartographic,
         defaultValue,
         defined,
+        deprecationWarning,
         DeveloperError,
         GeographicTilingScheme,
-        joinUrls,
-        loadXML,
         Rectangle,
+        Resource,
         RuntimeError,
         TileProviderError,
         WebMercatorTilingScheme,
@@ -38,9 +37,8 @@ define([
      * @exports createTileMapServiceImageryProvider
      *
      * @param {Object} [options] Object with the following properties:
-     * @param {String} [options.url='.'] Path to image tiles on server.
+     * @param {Resource|String} [options.url='.'] Path to image tiles on server.
      * @param {String} [options.fileExtension='png'] The file extension for images on the server.
-     * @param {Object} [options.proxy] A proxy to use for requests. This object is expected to have a getURL function which returns the proxied URL.
      * @param {Credit|String} [options.credit=''] A credit for the data source, which is displayed on the canvas.
      * @param {Number} [options.minimumLevel=0] The minimum level-of-detail supported by the imagery provider.  Take care when specifying
      *                 this that the number of tiles at the minimum level is small, such as four or less.  A larger number is likely
@@ -61,7 +59,7 @@ define([
      *
      * @see ArcGisMapServerImageryProvider
      * @see BingMapsImageryProvider
-     * @see GoogleEarthImageryProvider
+     * @see GoogleEarthEnterpriseMapsProvider
      * @see createOpenStreetMapImageryProvider
      * @see SingleTileImageryProvider
      * @see WebMapServiceImageryProvider
@@ -93,7 +91,18 @@ define([
         }
         //>>includeEnd('debug');
 
-        var url = options.url;
+        if (defined(options.proxy)) {
+            deprecationWarning('createTileMapServiceImageryProvider.proxy', 'The options.proxy parameter has been deprecated. Specify options.url as a Resource instance and set the proxy property there.');
+        }
+
+        var resource = Resource.createIfNeeded(options.url, {
+            proxy : options.proxy
+        });
+        resource.appendForwardSlash();
+
+        var xmlResource = resource.getDerivedResource({
+            url: 'tilemapresource.xml'
+        });
 
         var deferred = when.defer();
         var imageryProvider = new UrlTemplateImageryProvider(deferred.promise);
@@ -105,8 +114,7 @@ define([
             var tileSetRegex = /tileset/i;
             var tileSetsRegex = /tilesets/i;
             var bboxRegex = /boundingbox/i;
-            var srsRegex = /srs/i;
-            var format, bbox, tilesets, srs;
+            var format, bbox, tilesets;
             var tilesetsList = []; //list of TileSets
 
             // Allowing options properties (already copied to that) to override XML values
@@ -128,9 +136,17 @@ define([
                     }
                 } else if (bboxRegex.test(nodeList.item(i).nodeName)) {
                     bbox = nodeList.item(i);
-                } else if (srsRegex.test(nodeList.item(i).nodeName)) {
-                    srs = nodeList.item(i).textContent;
                 }
+            }
+
+            var message;
+            if (!defined(tilesets) || !defined(bbox)) {
+                message = 'Unable to find expected tilesets or bbox attributes in ' + xmlResource.url + '.';
+                metadataError = TileProviderError.handleError(metadataError, imageryProvider, imageryProvider.errorEvent, message, undefined, undefined, undefined, requestMetadata);
+                if(!metadataError.retry) {
+                    deferred.reject(new RuntimeError(message));
+                }
+                return;
             }
 
             var fileExtension = defaultValue(options.fileExtension, format.getAttribute('extension'));
@@ -147,7 +163,7 @@ define([
                 } else if (tilingSchemeName === 'mercator' || tilingSchemeName === 'global-mercator') {
                     tilingScheme = new WebMercatorTilingScheme({ ellipsoid : options.ellipsoid });
                 } else {
-                    var message = joinUrls(url, 'tilemapresource.xml') + 'specifies an unsupported profile attribute, ' + tilingSchemeName + '.';
+                    message = xmlResource.url + 'specifies an unsupported profile attribute, ' + tilingSchemeName + '.';
                     metadataError = TileProviderError.handleError(metadataError, imageryProvider, imageryProvider.errorEvent, message, undefined, undefined, undefined, requestMetadata);
                     if(!metadataError.retry) {
                         deferred.reject(new RuntimeError(message));
@@ -217,17 +233,18 @@ define([
                 minimumLevel = 0;
             }
 
-            var templateUrl = joinUrls(url, '{z}/{x}/{reverseY}.' + fileExtension);
+            var templateResource = resource.getDerivedResource({
+                url: '{z}/{x}/{reverseY}.' + fileExtension
+            });
 
             deferred.resolve({
-                url : templateUrl,
+                url : templateResource,
                 tilingScheme : tilingScheme,
                 rectangle : rectangle,
                 tileWidth : tileWidth,
                 tileHeight : tileHeight,
                 minimumLevel : minimumLevel,
                 maximumLevel : maximumLevel,
-                proxy : options.proxy,
                 tileDiscardPolicy : options.tileDiscardPolicy,
                 credit: options.credit
             });
@@ -243,30 +260,26 @@ define([
             var tilingScheme = defined(options.tilingScheme) ? options.tilingScheme : new WebMercatorTilingScheme({ ellipsoid : options.ellipsoid });
             var rectangle = defaultValue(options.rectangle, tilingScheme.rectangle);
 
-            var templateUrl = joinUrls(url, '{z}/{x}/{reverseY}.' + fileExtension);
+            var templateResource = resource.getDerivedResource({
+                url: '{z}/{x}/{reverseY}.' + fileExtension
+            });
 
             deferred.resolve({
-                url : templateUrl,
+                url : templateResource,
                 tilingScheme : tilingScheme,
                 rectangle : rectangle,
                 tileWidth : tileWidth,
                 tileHeight : tileHeight,
                 minimumLevel : minimumLevel,
                 maximumLevel : maximumLevel,
-                proxy : options.proxy,
                 tileDiscardPolicy : options.tileDiscardPolicy,
                 credit: options.credit
             });
         }
 
         function requestMetadata() {
-            var resourceUrl = joinUrls(url, 'tilemapresource.xml');
-            var proxy = options.proxy;
-            if (defined(proxy)) {
-                resourceUrl = proxy.getURL(resourceUrl);
-            }
             // Try to load remaining parameters from XML
-            loadXML(resourceUrl).then(metadataSuccess).otherwise(metadataFailure);
+            xmlResource.fetchXML().then(metadataSuccess).otherwise(metadataFailure);
         }
 
         requestMetadata();

@@ -1,8 +1,13 @@
-/*global define*/
 define([
-        './loadWithXhr'
+        './Check',
+        './defined',
+        './deprecationWarning',
+        './Resource'
     ], function(
-        loadWithXhr) {
+        Check,
+        defined,
+        deprecationWarning,
+        Resource) {
     'use strict';
 
     /**
@@ -13,10 +18,10 @@ define([
      *
      * @exports loadBlob
      *
-     * @param {String|Promise.<String>} url The URL of the data, or a promise for the URL.
+     * @param {Resource|String} urlOrResource The URL of the data.
      * @param {Object} [headers] HTTP headers to send with the requests.
-     * @returns {Promise.<Blob>} a promise that will resolve to the requested data when loaded.
-     *
+     * @param {Request} [request] The request object. Intended for internal use only.
+     * @returns {Promise.<Blob>|undefined} a promise that will resolve to the requested data when loaded. Returns undefined if <code>request.throttle</code> is true and the request does not have high enough priority.
      *
      * @example
      * // load a single URL asynchronously
@@ -25,16 +30,25 @@ define([
      * }).otherwise(function(error) {
      *     // an error occurred
      * });
-     * 
+     *
      * @see {@link http://www.w3.org/TR/cors/|Cross-Origin Resource Sharing}
      * @see {@link http://wiki.commonjs.org/wiki/Promises/A|CommonJS Promises/A}
+     *
+     * @deprecated
      */
-    function loadBlob(url, headers) {
-        return loadWithXhr({
-            url : url,
-            responseType : 'blob',
-            headers : headers
+    function loadBlob(urlOrResource, headers, request) {
+        //>>includeStart('debug', pragmas.debug);
+        Check.defined('urlOrResource', urlOrResource);
+        //>>includeEnd('debug');
+
+        deprecationWarning('loadBlob', 'loadBlob is deprecated and will be removed in Cesium 1.44. Please use Resource.fetchBlob instead.');
+
+        var resource = Resource.createIfNeeded(urlOrResource, {
+            headers: headers,
+            request: request
         });
+
+        return resource.fetchBlob();
     }
 
     return loadBlob;

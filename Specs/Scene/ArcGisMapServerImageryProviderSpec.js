@@ -1,17 +1,21 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/ArcGisMapServerImageryProvider',
+        'Core/appendForwardSlash',
         'Core/Cartesian2',
         'Core/Cartesian3',
         'Core/Cartographic',
         'Core/DefaultProxy',
         'Core/defined',
         'Core/GeographicTilingScheme',
+        'Core/getAbsoluteUri',
         'Core/loadImage',
         'Core/loadJsonp',
         'Core/loadWithXhr',
+        'Core/objectToQuery',
         'Core/queryToObject',
         'Core/Rectangle',
+        'Core/RequestScheduler',
+        'Core/Resource',
         'Core/WebMercatorProjection',
         'Core/WebMercatorTilingScheme',
         'Scene/DiscardMissingTileImagePolicy',
@@ -24,17 +28,22 @@ defineSuite([
         'ThirdParty/Uri'
     ], function(
         ArcGisMapServerImageryProvider,
+        appendForwardSlash,
         Cartesian2,
         Cartesian3,
         Cartographic,
         DefaultProxy,
         defined,
         GeographicTilingScheme,
+        getAbsoluteUri,
         loadImage,
         loadJsonp,
         loadWithXhr,
+        objectToQuery,
         queryToObject,
         Rectangle,
+        RequestScheduler,
+        Resource,
         WebMercatorProjection,
         WebMercatorTilingScheme,
         DiscardMissingTileImagePolicy,
@@ -46,6 +55,10 @@ defineSuite([
         pollToPromise,
         Uri) {
     'use strict';
+
+    beforeEach(function() {
+        RequestScheduler.clearForSpecs();
+    });
 
     afterEach(function() {
         loadJsonp.loadAndExecuteScript = loadJsonp.defaultLoadAndExecuteScript;
@@ -65,7 +78,7 @@ defineSuite([
         var uriWithoutQuery = new Uri(uri);
         uriWithoutQuery.query = '';
 
-        expect(uriWithoutQuery.toString()).toEqual(expectedBaseUrl);
+        expect(uriWithoutQuery.toString()).toEqual(appendForwardSlash(expectedBaseUrl));
 
         var expectedParams = {
             callback : functionName,
@@ -140,6 +153,25 @@ defineSuite([
         });
     });
 
+    it('resolves readyPromise with Resource', function() {
+        var baseUrl = '//tiledArcGisMapServer.invalid';
+
+        stubJSONPCall(baseUrl, webMercatorResult);
+
+        var resource = new Resource({
+            url : baseUrl
+        });
+
+        var provider = new ArcGisMapServerImageryProvider({
+            url : resource
+        });
+
+        return provider.readyPromise.then(function(result) {
+            expect(result).toBe(true);
+            expect(provider.ready).toBe(true);
+        });
+    });
+
     it('rejects readyPromise on error', function() {
         var baseUrl = '//tiledArcGisMapServer.invalid';
 
@@ -156,7 +188,7 @@ defineSuite([
     });
 
     it('supports tiled servers in web mercator projection', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         stubJSONPCall(baseUrl, webMercatorResult);
 
@@ -184,7 +216,7 @@ defineSuite([
                     // load blob url normally
                     loadImage.defaultCreateImage(url, crossOrigin, deferred);
                 } else {
-                    expect(url).toEqual(baseUrl + '/tile/0/0/0');
+                    expect(url).toEqual(getAbsoluteUri(baseUrl + 'tile/0/0/0'));
 
                     // Just return any old image.
                     loadImage.defaultCreateImage('Data/Images/Red16x16.png', crossOrigin, deferred);
@@ -192,7 +224,7 @@ defineSuite([
             };
 
             loadWithXhr.load = function(url, responseType, method, data, headers, deferred, overrideMimeType) {
-                expect(url).toEqual(baseUrl + '/tile/0/0/0');
+                expect(url).toEqual(getAbsoluteUri(baseUrl + 'tile/0/0/0'));
 
                 // Just return any old image.
                 loadWithXhr.defaultLoad('Data/Images/Red16x16.png', responseType, method, data, headers, deferred);
@@ -234,7 +266,7 @@ defineSuite([
     };
 
     it('supports tiled servers in geographic projection', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         stubJSONPCall(baseUrl, geographicResult);
 
@@ -261,7 +293,7 @@ defineSuite([
                     // load blob url normally
                     loadImage.defaultCreateImage(url, crossOrigin, deferred);
                 } else {
-                    expect(url).toEqual(baseUrl + '/tile/0/0/0');
+                    expect(url).toEqual(getAbsoluteUri(baseUrl + 'tile/0/0/0'));
 
                     // Just return any old image.
                     loadImage.defaultCreateImage('Data/Images/Red16x16.png', crossOrigin, deferred);
@@ -269,7 +301,7 @@ defineSuite([
             };
 
             loadWithXhr.load = function(url, responseType, method, data, headers, deferred, overrideMimeType) {
-                expect(url).toEqual(baseUrl + '/tile/0/0/0');
+                expect(url).toEqual(getAbsoluteUri(baseUrl + 'tile/0/0/0'));
 
                 // Just return any old image.
                 loadWithXhr.defaultLoad('Data/Images/Red16x16.png', responseType, method, data, headers, deferred);
@@ -282,7 +314,7 @@ defineSuite([
     });
 
     it('supports non-tiled servers', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         stubJSONPCall(baseUrl, {
             "currentVersion" : 10.01,
@@ -315,7 +347,7 @@ defineSuite([
                 var uriWithoutQuery = new Uri(uri);
                 uriWithoutQuery.query = '';
 
-                expect(uriWithoutQuery.toString()).toEqual(baseUrl + '/export');
+                expect(uriWithoutQuery.toString()).toEqual(getAbsoluteUri(baseUrl + 'export'));
 
                 expect(params.f).toEqual('image');
                 expect(params.bboxSR).toEqual('4326');
@@ -335,7 +367,7 @@ defineSuite([
     });
 
     it('supports non-tiled servers with various constructor parameters', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
         var token = '5e(u|2!7Y';
 
         stubJSONPCall(baseUrl, {
@@ -377,7 +409,7 @@ defineSuite([
                 var uriWithoutQuery = new Uri(uri);
                 uriWithoutQuery.query = '';
 
-                expect(uriWithoutQuery.toString()).toEqual(baseUrl + '/export');
+                expect(uriWithoutQuery.toString()).toEqual(getAbsoluteUri(baseUrl + 'export'));
 
                 expect(params.f).toEqual('image');
                 expect(params.bboxSR).toEqual('3857');
@@ -399,7 +431,7 @@ defineSuite([
     });
 
     it('includes security token in requests if one is specified', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid',
+        var baseUrl = '//tiledArcGisMapServer.invalid/',
             token = '5e(u|2!7Y';
 
         stubJSONPCall(baseUrl, webMercatorResult, false, token);
@@ -408,6 +440,10 @@ defineSuite([
             url : baseUrl,
             token : token
         });
+
+        var expectedTileUrl = getAbsoluteUri(baseUrl + 'tile/0/0/0?' + objectToQuery({
+            token: token
+        }));
 
         expect(provider.url).toEqual(baseUrl);
         expect(provider.token).toEqual(token);
@@ -430,7 +466,7 @@ defineSuite([
                     // load blob url normally
                     loadImage.defaultCreateImage(url, crossOrigin, deferred);
                 } else {
-                    expect(url).toEqual(baseUrl + '/tile/0/0/0?token=' + token);
+                    expect(url).toEqual(expectedTileUrl);
 
                     // Just return any old image.
                     loadImage.defaultCreateImage('Data/Images/Red16x16.png', crossOrigin, deferred);
@@ -438,7 +474,7 @@ defineSuite([
             };
 
             loadWithXhr.load = function(url, responseType, method, data, headers, deferred, overrideMimeType) {
-                expect(url).toEqual(baseUrl + '/tile/0/0/0?token=' + token);
+                expect(url).toEqual(expectedTileUrl);
 
                 // Just return any old image.
                 loadWithXhr.defaultLoad('Data/Images/Red16x16.png', responseType, method, data, headers, deferred);
@@ -451,7 +487,7 @@ defineSuite([
     });
 
     it('routes requests through a proxy if one is specified', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
         var proxy = new DefaultProxy('/proxy/');
 
         stubJSONPCall(baseUrl, geographicResult, true);
@@ -481,7 +517,7 @@ defineSuite([
                     // load blob url normally
                     loadImage.defaultCreateImage(url, crossOrigin, deferred);
                 } else {
-                    expect(url).toEqual(baseUrl + '/tile/0/0/0');
+                    expect(url).toEqual(getAbsoluteUri(baseUrl + 'tile/0/0/0'));
 
                     // Just return any old image.
                     loadImage.defaultCreateImage('Data/Images/Red16x16.png', crossOrigin, deferred);
@@ -489,7 +525,7 @@ defineSuite([
             };
 
             loadWithXhr.load = function(url, responseType, method, data, headers, deferred, overrideMimeType) {
-                expect(url).toEqual(proxy.getURL(baseUrl + '/tile/0/0/0'));
+                expect(url).toEqual(proxy.getURL(getAbsoluteUri(baseUrl + 'tile/0/0/0')));
 
                 // Just return any old image.
                 loadWithXhr.defaultLoad('Data/Images/Red16x16.png', responseType, method, data, headers, deferred);
@@ -502,7 +538,7 @@ defineSuite([
     });
 
     it('raises error on unsupported WKID', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         var unsupportedWKIDResult = {
             "currentVersion" : 10.01,
@@ -559,7 +595,7 @@ defineSuite([
     });
 
     it('raises error on invalid URL', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         var provider = new ArcGisMapServerImageryProvider({
             url : baseUrl
@@ -582,7 +618,7 @@ defineSuite([
     });
 
     it('raises error event when image cannot be loaded', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         stubJSONPCall(baseUrl, {
             "currentVersion" : 10.01,
@@ -602,6 +638,9 @@ defineSuite([
             if (tries < 3) {
                 error.retry = true;
             }
+            setTimeout(function() {
+                RequestScheduler.update();
+            }, 1);
         });
 
         loadImage.createImage = function(url, crossOrigin, deferred) {
@@ -622,6 +661,7 @@ defineSuite([
             var imagery = new Imagery(layer, 0, 0, 0);
             imagery.addReference();
             layer._requestImagery(imagery);
+            RequestScheduler.update();
 
             return pollToPromise(function() {
                 return imagery.state === ImageryState.RECEIVED;
@@ -634,7 +674,7 @@ defineSuite([
     });
 
     it('honors fullExtent of tiled server with web mercator projection', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         var webMercatorFullExtentResult = {
             "currentVersion" : 10.01,
@@ -694,7 +734,7 @@ defineSuite([
     });
 
     it('constrains extent to the tiling scheme\'s rectangle', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         var webMercatorOutsideBoundsResult = {
             "currentVersion" : 10.01,
@@ -753,7 +793,7 @@ defineSuite([
     });
 
     it('honors fullExtent of tiled server with geographic projection', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         var geographicFullExtentResult = {
             "currentVersion" : 10.01,
@@ -809,7 +849,7 @@ defineSuite([
     });
 
     it('raises error if the spatialReference of the fullExtent is unknown', function() {
-        var baseUrl = '//tiledArcGisMapServer.invalid';
+        var baseUrl = '//tiledArcGisMapServer.invalid/';
 
         var unknownSpatialReferenceResult = {
             "currentVersion" : 10.01,
@@ -979,7 +1019,10 @@ defineSuite([
             });
 
             loadWithXhr.load = function(url, responseType, method, data, headers, deferred, overrideMimeType) {
-                expect(url).toContain('layers=visible:someLayer,anotherLayerYay');
+                var uri = new Uri(url);
+                var query = queryToObject(uri.getQuery());
+
+                expect(query.layers).toContain('visible:someLayer,anotherLayerYay');
                 loadWithXhr.defaultLoad('Data/ArcGIS/identify-WebMercator.json', responseType, method, data, headers, deferred, overrideMimeType);
             };
 
@@ -993,7 +1036,7 @@ defineSuite([
         });
 
         it('picks using proxy if one is specified', function() {
-            var baseUrl = 'made/up/map/server';
+            var baseUrl = 'http://made/up/map/server/';
             var proxy = new DefaultProxy('/proxy/');
             var layers = '0,1';
 
@@ -1009,7 +1052,7 @@ defineSuite([
                 var originalUriQuery = new Uri(decodeURIComponent(proxiedUri.query)).query;
 
                 // DefaultProxy simply puts the original request as the query string; duplicate it here expect match
-                expect(proxiedUri.toString()).toEqual(proxy.getURL(baseUrl + '/identify?' + originalUriQuery));
+                expect(proxiedUri.toString()).toEqual(proxy.getURL(baseUrl + 'identify?' + originalUriQuery));
 
                 loadWithXhr.defaultLoad('Data/ArcGIS/identify-WebMercator.json', responseType, method, data, headers, deferred, overrideMimeType);
             };

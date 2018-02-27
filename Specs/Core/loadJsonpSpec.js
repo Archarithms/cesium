@@ -1,10 +1,21 @@
-/*global defineSuite*/
 defineSuite([
         'Core/loadJsonp',
-        'Core/DefaultProxy'
+        'Core/DefaultProxy',
+        'Core/queryToObject',
+        'Core/Request',
+        'Core/RequestErrorEvent',
+        'Core/RequestScheduler',
+        'Core/Resource',
+        'ThirdParty/Uri'
     ], function(
         loadJsonp,
-        DefaultProxy) {
+        DefaultProxy,
+        queryToObject,
+        Request,
+        RequestErrorEvent,
+        RequestScheduler,
+        Resource,
+        Uri) {
     'use strict';
 
     it('throws with no url', function() {
@@ -65,5 +76,157 @@ defineSuite([
             expect(url).toStartWith(options.proxy.getURL(testUrl));
         });
         loadJsonp(testUrl, options);
+    });
+
+    it('returns undefined if the request is throttled', function() {
+        var oldMaximumRequests = RequestScheduler.maximumRequests;
+        RequestScheduler.maximumRequests = 0;
+
+        var request = new Request({
+            throttle : true
+        });
+
+        var testUrl = 'http://example.invalid/testuri';
+        var promise = loadJsonp(testUrl, undefined, request);
+        expect(promise).toBeUndefined();
+
+        RequestScheduler.maximumRequests = oldMaximumRequests;
+    });
+
+    describe('retries when Resource has the callback set', function() {
+        it('rejects after too many retries', function() {
+            //var cb = jasmine.createSpy('retry').and.returnValue(true);
+            var cb = jasmine.createSpy('retry').and.callFake(function(resource, error) {
+                return true;
+            });
+
+            var lastDeferred;
+            spyOn(loadJsonp, 'loadAndExecuteScript').and.callFake(function(url, functionName, deferred) {
+                lastDeferred = deferred;
+            });
+
+            var resource = new Resource({
+                url : 'http://example.invalid',
+                retryCallback: cb,
+                retryAttempts: 1
+            });
+
+            var promise = loadJsonp(resource);
+
+            expect(promise).toBeDefined();
+
+            var resolvedValue;
+            var rejectedError;
+            promise.then(function(value) {
+                resolvedValue = value;
+            }).otherwise(function (error) {
+                rejectedError = error;
+            });
+
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toBeUndefined();
+
+            lastDeferred.reject('some error'); // This should retry
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toBeUndefined();
+
+            expect(cb.calls.count()).toEqual(1);
+            var receivedResource = cb.calls.argsFor(0)[0];
+            expect(receivedResource.url).toEqual(resource.url + '?callback=' + receivedResource.queryParameters.callback);
+            expect(receivedResource._retryCount).toEqual(1);
+            expect(cb.calls.argsFor(0)[1]).toEqual('some error');
+
+            lastDeferred.reject('another error'); // This fails because we only retry once
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toEqual('another error');
+        });
+
+        it('rejects after callback returns false', function() {
+            var cb = jasmine.createSpy('retry').and.returnValue(false);
+
+            var lastDeferred;
+            spyOn(loadJsonp, 'loadAndExecuteScript').and.callFake(function(url, functionName, deferred) {
+                lastDeferred = deferred;
+            });
+
+            var resource = new Resource({
+                url : 'http://example.invalid',
+                retryCallback: cb,
+                retryAttempts: 2
+            });
+
+            var promise = loadJsonp(resource);
+
+            expect(promise).toBeDefined();
+
+            var resolvedValue;
+            var rejectedError;
+            promise.then(function(value) {
+                resolvedValue = value;
+            }).otherwise(function (error) {
+                rejectedError = error;
+            });
+
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toBeUndefined();
+
+            lastDeferred.reject('some error'); // This fails because the callback returns false
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toEqual('some error');
+
+            expect(cb.calls.count()).toEqual(1);
+            var receivedResource = cb.calls.argsFor(0)[0];
+            expect(receivedResource.url).toEqual(resource.url + '?callback=' + receivedResource.queryParameters.callback);
+            expect(receivedResource._retryCount).toEqual(1);
+            expect(cb.calls.argsFor(0)[1]).toEqual('some error');
+        });
+
+        it('resolves after retry', function() {
+            var cb = jasmine.createSpy('retry').and.returnValue(true);
+
+            var lastDeferred;
+            var lastUrl;
+            spyOn(loadJsonp, 'loadAndExecuteScript').and.callFake(function(url, functionName, deferred) {
+                lastUrl = url;
+                lastDeferred = deferred;
+            });
+
+            var resource = new Resource({
+                url : 'http://example.invalid',
+                retryCallback: cb,
+                retryAttempts: 1
+            });
+
+            var promise = loadJsonp(resource);
+
+            expect(promise).toBeDefined();
+
+            var resolvedValue;
+            var rejectedError;
+            promise.then(function(value) {
+                resolvedValue = value;
+            }).otherwise(function (error) {
+                rejectedError = error;
+            });
+
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toBeUndefined();
+
+            lastDeferred.reject('some error'); // This should retry
+            expect(resolvedValue).toBeUndefined();
+            expect(rejectedError).toBeUndefined();
+
+            expect(cb.calls.count()).toEqual(1);
+            var receivedResource = cb.calls.argsFor(0)[0];
+            expect(receivedResource.url).toEqual(resource.url + '?callback=' + receivedResource.queryParameters.callback);
+            expect(receivedResource._retryCount).toEqual(1);
+            expect(cb.calls.argsFor(0)[1]).toEqual('some error');
+
+            var uri = new Uri(lastUrl);
+            var query = queryToObject(uri.query);
+            window[query.callback]('something good');
+            expect(resolvedValue).toEqual('something good');
+            expect(rejectedError).toBeUndefined();
+        });
     });
 });

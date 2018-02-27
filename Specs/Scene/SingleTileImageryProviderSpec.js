@@ -1,4 +1,3 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/SingleTileImageryProvider',
         'Core/DefaultProxy',
@@ -6,6 +5,7 @@ defineSuite([
         'Core/GeographicTilingScheme',
         'Core/loadImage',
         'Core/Rectangle',
+        'Core/Resource',
         'Scene/Imagery',
         'Scene/ImageryLayer',
         'Scene/ImageryProvider',
@@ -19,6 +19,7 @@ defineSuite([
         GeographicTilingScheme,
         loadImage,
         Rectangle,
+        Resource,
         Imagery,
         ImageryLayer,
         ImageryProvider,
@@ -45,6 +46,22 @@ defineSuite([
             expect(provider.ready).toBe(true);
         });
     });
+
+    it('resolves readyPromise with Resource', function() {
+        var resource = new Resource({
+            url : 'Data/Images/Red16x16.png'
+        });
+
+        var provider = new SingleTileImageryProvider({
+            url : resource
+        });
+
+        return provider.readyPromise.then(function(result) {
+            expect(result).toBe(true);
+            expect(provider.ready).toBe(true);
+        });
+    });
+
 
     it('rejects readyPromise on error', function() {
         var provider = new SingleTileImageryProvider({
@@ -166,13 +183,13 @@ defineSuite([
 
     it('routes requests through a proxy if one is specified', function() {
         var imageUrl = 'Data/Images/Red16x16.png';
+        var proxy = new DefaultProxy('/proxy/');
 
         spyOn(loadImage, 'createImage').and.callFake(function(url, crossOrigin, deferred) {
             expect(url.indexOf(proxy.getURL('Data/Images/Red16x16.png'))).toEqual(0);
             loadImage.defaultCreateImage(url, crossOrigin, deferred);
         });
 
-        var proxy = new DefaultProxy('/proxy/');
         var provider = new SingleTileImageryProvider({
             url : imageUrl,
             proxy : proxy

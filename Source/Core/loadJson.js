@@ -1,19 +1,16 @@
-/*global define*/
 define([
         './clone',
         './defined',
+        './deprecationWarning',
         './DeveloperError',
-        './loadText'
+        './Resource'
     ], function(
         clone,
         defined,
+        deprecationWarning,
         DeveloperError,
-        loadText) {
+        Resource) {
     'use strict';
-
-    var defaultHeaders = {
-        Accept : 'application/json,*/*;q=0.01'
-    };
 
     // note: &#42;&#47;&#42; below is */* but that ends the comment block early
     /**
@@ -26,11 +23,12 @@ define([
      *
      * @exports loadJson
      *
-     * @param {String|Promise.<String>} url The URL to request, or a promise for the URL.
+     * @param {Resource|String} urlOrResource The URL to request.
      * @param {Object} [headers] HTTP headers to send with the request.
      * 'Accept: application/json,&#42;&#47;&#42;;q=0.01' is added to the request headers automatically
      * if not specified.
-     * @returns {Promise.<Object>} a promise that will resolve to the requested data when loaded.
+     * @param {Request} [request] The request object. Intended for internal use only.
+     * @returns {Promise.<Object>|undefined} a promise that will resolve to the requested data when loaded. Returns undefined if <code>request.throttle</code> is true and the request does not have high enough priority.
      *
      *
      * @example
@@ -39,29 +37,28 @@ define([
      * }).otherwise(function(error) {
      *     // an error occurred
      * });
-     * 
+     *
      * @see loadText
      * @see {@link http://www.w3.org/TR/cors/|Cross-Origin Resource Sharing}
      * @see {@link http://wiki.commonjs.org/wiki/Promises/A|CommonJS Promises/A}
+     *
+     * @deprecated
      */
-    function loadJson(url, headers) {
+    function loadJson(urlOrResource, headers, request) {
         //>>includeStart('debug', pragmas.debug);
-        if (!defined(url)) {
-            throw new DeveloperError('url is required.');
+        if (!defined(urlOrResource)) {
+            throw new DeveloperError('urlOrResource is required.');
         }
         //>>includeEnd('debug');
 
-        if (!defined(headers)) {
-            headers = defaultHeaders;
-        } else if (!defined(headers.Accept)) {
-            // clone before adding the Accept header
-            headers = clone(headers);
-            headers.Accept = defaultHeaders.Accept;
-        }
+        deprecationWarning('loadJson', 'loadJson is deprecated and will be removed in Cesium 1.44. Please use Resource.fetchJson instead.');
 
-        return loadText(url, headers).then(function(value) {
-            return JSON.parse(value);
+        var resource = Resource.createIfNeeded(urlOrResource, {
+            headers: headers,
+            request: request
         });
+
+        return resource.fetchJson();
     }
 
     return loadJson;

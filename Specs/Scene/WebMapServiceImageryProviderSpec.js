@@ -1,4 +1,3 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/WebMapServiceImageryProvider',
         'Core/Cartographic',
@@ -10,6 +9,8 @@ defineSuite([
         'Core/Math',
         'Core/queryToObject',
         'Core/Rectangle',
+        'Core/RequestScheduler',
+        'Core/Resource',
         'Core/WebMercatorTilingScheme',
         'Scene/GetFeatureInfoFormat',
         'Scene/Imagery',
@@ -30,6 +31,8 @@ defineSuite([
         CesiumMath,
         queryToObject,
         Rectangle,
+        RequestScheduler,
+        Resource,
         WebMercatorTilingScheme,
         GetFeatureInfoFormat,
         Imagery,
@@ -40,6 +43,10 @@ defineSuite([
         pollToPromise,
         Uri) {
     'use strict';
+
+    beforeEach(function() {
+        RequestScheduler.clearForSpecs();
+    });
 
     afterEach(function() {
         loadImage.createImage = loadImage.defaultCreateImage;
@@ -71,6 +78,22 @@ defineSuite([
     it('resolves readyPromise', function() {
         var provider = new WebMapServiceImageryProvider({
             url : 'made/up/wms/server',
+            layers : 'someLayer'
+        });
+
+        return provider.readyPromise.then(function(result) {
+            expect(result).toBe(true);
+            expect(provider.ready).toBe(true);
+        });
+    });
+
+    it('resolves readyPromise with Resource', function() {
+        var resource = new Resource({
+            url : 'made/up/wms/server'
+        });
+
+        var provider = new WebMapServiceImageryProvider({
+            url : resource,
             layers : 'someLayer'
         });
 
@@ -133,9 +156,10 @@ defineSuite([
                 deferred.resolve(true);
             });
 
-            provider.requestImage(0, 0, 0);
+            return provider.requestImage(0, 0, 0).then(function(image) {
+                expect(loadImage.createImage).toHaveBeenCalled();
+            });
 
-            expect(loadImage.createImage).toHaveBeenCalled();
         });
     });
 
@@ -148,7 +172,7 @@ defineSuite([
 
         spyOn(ImageryProvider, 'loadImage');
         provider.requestImage(0, 0, 0);
-        var url = ImageryProvider.loadImage.calls.mostRecent().args[1];
+        var url = ImageryProvider.loadImage.calls.mostRecent().args[1].url;
         expect('123'.indexOf(url.substring(0, 1))).toBeGreaterThanOrEqualTo(0);
     });
 
@@ -161,7 +185,7 @@ defineSuite([
 
         spyOn(ImageryProvider, 'loadImage');
         provider.requestImage(0, 0, 0);
-        var url = ImageryProvider.loadImage.calls.mostRecent().args[1];
+        var url = ImageryProvider.loadImage.calls.mostRecent().args[1].url;
         expect(['foo', 'bar'].indexOf(url.substring(0, 3))).toBeGreaterThanOrEqualTo(0);
     });
 
@@ -182,9 +206,9 @@ defineSuite([
                 deferred.resolve(true);
             });
 
-            provider.requestImage(0, 0, 0);
-
-            expect(loadImage.createImage).toHaveBeenCalled();
+            return provider.requestImage(0, 0, 0).then(function(image) {
+                expect(loadImage.createImage).toHaveBeenCalled();
+            });
         });
     });
 
@@ -200,16 +224,15 @@ defineSuite([
             spyOn(loadImage, 'createImage').and.callFake(function(url, crossOrigin, deferred) {
                 var questionMarkCount = url.match(/\?/g).length;
                 expect(questionMarkCount).toEqual(1);
-
                 expect(url).not.toContain('&&');
 
                 // Don't need to actually load image, but satisfy the request.
                 deferred.resolve(true);
             });
 
-            provider.requestImage(0, 0, 0);
-
-            expect(loadImage.createImage).toHaveBeenCalled();
+            return provider.requestImage(0, 0, 0).then(function(image) {
+                expect(loadImage.createImage).toHaveBeenCalled();
+            });
         });
     });
 
@@ -566,11 +589,14 @@ defineSuite([
 
                 expect(params.format).toEqual('foo');
                 expect(params.format).not.toEqual('image/jpeg');
+
+                // Just return any old image.
+                loadImage.defaultCreateImage('Data/Images/Red16x16.png', crossOrigin, deferred);
             });
 
-            provider.requestImage(0, 0, 0);
-
-            expect(loadImage.createImage).toHaveBeenCalled();
+            return provider.requestImage(0, 0, 0).then(function(image) {
+                expect(loadImage.createImage).toHaveBeenCalled();
+            });
         });
     });
 
@@ -700,6 +726,9 @@ defineSuite([
                 if (tries < 3) {
                     error.retry = true;
                 }
+                setTimeout(function() {
+                    RequestScheduler.update();
+                }, 1);
             });
 
             loadImage.createImage = function(url, crossOrigin, deferred) {
@@ -717,6 +746,7 @@ defineSuite([
             var imagery = new Imagery(layer, 0, 0, 0);
             imagery.addReference();
             layer._requestImagery(imagery);
+            RequestScheduler.update();
 
             return pollToPromise(function() {
                 return imagery.state === ImageryState.RECEIVED;

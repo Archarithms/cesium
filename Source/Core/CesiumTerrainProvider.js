@@ -1,56 +1,66 @@
-/*global define*/
 define([
         '../ThirdParty/Uri',
         '../ThirdParty/when',
+        './AttributeCompression',
         './BoundingSphere',
         './Cartesian3',
         './Credit',
         './defaultValue',
         './defined',
         './defineProperties',
+        './deprecationWarning',
         './DeveloperError',
         './Event',
         './GeographicTilingScheme',
         './HeightmapTerrainData',
         './IndexDatatype',
-        './joinUrls',
-        './loadArrayBuffer',
-        './loadJson',
         './Math',
         './OrientedBoundingBox',
         './QuantizedMeshTerrainData',
+        './Resource',
+        './RuntimeError',
         './TerrainProvider',
-        './throttleRequestByServer',
         './TileAvailability',
         './TileProviderError'
     ], function(
         Uri,
         when,
+        AttributeCompression,
         BoundingSphere,
         Cartesian3,
         Credit,
         defaultValue,
         defined,
         defineProperties,
+        deprecationWarning,
         DeveloperError,
         Event,
         GeographicTilingScheme,
         HeightmapTerrainData,
         IndexDatatype,
-        joinUrls,
-        loadArrayBuffer,
-        loadJson,
         CesiumMath,
         OrientedBoundingBox,
         QuantizedMeshTerrainData,
+        Resource,
+        RuntimeError,
         TerrainProvider,
-        throttleRequestByServer,
         TileAvailability,
         TileProviderError) {
     'use strict';
 
+    function LayerInformation(layer) {
+        this.resource = layer.resource;
+        this.version = layer.version;
+        this.isHeightmap = layer.isHeightmap;
+        this.tileUrlTemplates = layer.tileUrlTemplates;
+        this.availability = layer.availability;
+        this.hasVertexNormals = layer.hasVertexNormals;
+        this.hasWaterMask = layer.hasWaterMask;
+        this.littleEndianExtensionSize = layer.littleEndianExtensionSize;
+    }
+
     /**
-     * A {@link TerrainProvider} that access terrain data in a Cesium terrain format.
+     * A {@link TerrainProvider} that accesses terrain data in a Cesium terrain format.
      * The format is described on the
      * {@link https://github.com/AnalyticalGraphicsInc/cesium/wiki/Cesium-Terrain-Server|Cesium wiki}.
      *
@@ -58,8 +68,7 @@ define([
      * @constructor
      *
      * @param {Object} options Object with the following properties:
-     * @param {String} options.url The URL of the Cesium terrain server.
-     * @param {Proxy} [options.proxy] A proxy to use for requests. This object is expected to have a getURL function which returns the proxied URL, if needed.
+     * @param {Resource|String} options.url The URL of the Cesium terrain server.
      * @param {Boolean} [options.requestVertexNormals=false] Flag that indicates if the client should request additional lighting information from the server, in the form of per vertex normals if available.
      * @param {Boolean} [options.requestWaterMask=false] Flag that indicates if the client should request per tile water masks from the server,  if available.
      * @param {Ellipsoid} [options.ellipsoid] The ellipsoid.  If not specified, the WGS84 ellipsoid is used.
@@ -70,7 +79,7 @@ define([
      * // Construct a terrain provider that uses per vertex normals for lighting
      * // to add shading detail to an imagery provider.
      * var terrainProvider = new Cesium.CesiumTerrainProvider({
-     *     url : 'https://assets.agi.com/stk-terrain/world',
+     *     url : 'https://assets.agi.com/stk-terrain/v1/tilesets/world/tiles',
      *     requestVertexNormals : true
      * });
      *
@@ -99,8 +108,14 @@ define([
         }
         //>>includeEnd('debug');
 
-        this._url = options.url;
-        this._proxy = options.proxy;
+        if (defined(options.proxy)) {
+            deprecationWarning('CesiumTerrainProvider.proxy', 'The options.proxy parameter has been deprecated. Specify options.url as a Resource instance and set the proxy property there.');
+        }
+
+        var resource = Resource.createIfNeeded(options.url, {
+            proxy: options.proxy
+        });
+        resource.appendForwardSlash();
 
         this._tilingScheme = new GeographicTilingScheme({
             numberOfLevelZeroTilesX : 2,
@@ -113,14 +128,8 @@ define([
 
         this._heightmapStructure = undefined;
         this._hasWaterMask = false;
-
-        /**
-         * Boolean flag that indicates if the Terrain Server can provide vertex normals.
-         * @type {Boolean}
-         * @default false
-         * @private
-         */
         this._hasVertexNormals = false;
+
         /**
          * Boolean flag that indicates if the client should request vertex normals from the server.
          * @type {Boolean}
@@ -128,7 +137,7 @@ define([
          * @private
          */
         this._requestVertexNormals = defaultValue(options.requestVertexNormals, false);
-        this._littleEndianExtensionSize = true;
+
         /**
          * Boolean flag that indicates if the client should request tile watermasks from the server.
          * @type {Boolean}
@@ -138,26 +147,31 @@ define([
         this._requestWaterMask = defaultValue(options.requestWaterMask, false);
 
         this._errorEvent = new Event();
-        this._availability = undefined;
 
         var credit = options.credit;
         if (typeof credit === 'string') {
-            credit = new Credit(credit);
+            credit = new Credit({text: credit});
         }
         this._credit = credit;
+
+        this._availability = undefined;
 
         this._ready = false;
         this._readyPromise = when.defer();
 
-        var metadataUrl = joinUrls(this._url, 'layer.json');
-        if (defined(this._proxy)) {
-            metadataUrl = this._proxy.getURL(metadataUrl);
-        }
+        var lastResource = resource;
+        var metadataResource = lastResource.getDerivedResource({
+            url: 'layer.json'
+        });
 
         var that = this;
         var metadataError;
 
-        function metadataSuccess(data) {
+        var layers = this._layers = [];
+        var attribution = '';
+        var overallAvailability = [];
+
+        function parseMetadataSuccess(data) {
             var message;
 
             if (!data.format) {
@@ -172,8 +186,14 @@ define([
                 return;
             }
 
+            var hasVertexNormals = false;
+            var hasWaterMask = false;
+            var littleEndianExtensionSize = true;
+            var isHeightmap = false;
             if (data.format === 'heightmap-1.0') {
-                that._heightmapStructure = {
+                isHeightmap = true;
+                if (!defined(that._heightmapStructure)) {
+                    that._heightmapStructure = {
                         heightScale : 1.0 / 5.0,
                         heightOffset : -1000.0,
                         elementsPerHeight : 1,
@@ -183,7 +203,8 @@ define([
                         lowestEncodedHeight : 0,
                         highestEncodedHeight : 256 * 256 - 1
                     };
-                that._hasWaterMask = true;
+                }
+                hasWaterMask = true;
                 that._requestWaterMask = true;
             } else if (data.format.indexOf('quantized-mesh-1.') !== 0) {
                 message = 'The tile format "' + data.format + '" is invalid or not supported.';
@@ -191,35 +212,28 @@ define([
                 return;
             }
 
-            that._tileUrlTemplates = data.tiles;
-            for (var i = 0; i < that._tileUrlTemplates.length; ++i) {
-                var template = new Uri(that._tileUrlTemplates[i]);
-                var baseUri = new Uri(that._url);
-                if (template.authority && !baseUri.authority) {
-                    baseUri.authority = template.authority;
-                    baseUri.scheme = template.scheme;
-                }
-                that._tileUrlTemplates[i] = joinUrls(baseUri, template).toString().replace('{version}', data.version);
-            }
+            var tileUrlTemplates = data.tiles;
 
             var availableTiles = data.available;
-
+            var availability;
             if (defined(availableTiles)) {
-                that._availability = new TileAvailability(that._tilingScheme, availableTiles.length);
+                availability = new TileAvailability(that._tilingScheme, availableTiles.length);
 
                 for (var level = 0; level < availableTiles.length; ++level) {
                     var rangesAtLevel = availableTiles[level];
                     var yTiles = that._tilingScheme.getNumberOfYTilesAtLevel(level);
+                    if (!defined(overallAvailability[level])) {
+                        overallAvailability[level] = [];
+                    }
 
                     for (var rangeIndex = 0; rangeIndex < rangesAtLevel.length; ++rangeIndex) {
                         var range = rangesAtLevel[rangeIndex];
-                        that._availability.addAvailableTileRange(level, range.startX, yTiles - range.endY - 1, range.endX, yTiles - range.startY - 1);
+                        var yStart = yTiles - range.endY - 1;
+                        var yEnd = yTiles - range.startY - 1;
+                        overallAvailability[level].push([range.startX, yStart, range.endX, yEnd]);
+                        availability.addAvailableTileRange(level, range.startX, yStart, range.endX, yEnd);
                     }
                 }
-            }
-
-            if (!defined(that._credit) && defined(data.attribution) && data.attribution !== null) {
-                that._credit = new Credit(data.attribution);
             }
 
             // The vertex normals defined in the 'octvertexnormals' extension is identical to the original
@@ -229,17 +243,86 @@ define([
             // by setting the _littleEndianExtensionSize to false. Always prefer 'octvertexnormals'
             // over 'vertexnormals' if both extensions are supported by the server.
             if (defined(data.extensions) && data.extensions.indexOf('octvertexnormals') !== -1) {
-                that._hasVertexNormals = true;
+                hasVertexNormals = true;
             } else if (defined(data.extensions) && data.extensions.indexOf('vertexnormals') !== -1) {
-                that._hasVertexNormals = true;
-                that._littleEndianExtensionSize = false;
+                hasVertexNormals = true;
+                littleEndianExtensionSize = false;
             }
             if (defined(data.extensions) && data.extensions.indexOf('watermask') !== -1) {
-                that._hasWaterMask = true;
+                hasWaterMask = true;
             }
 
-            that._ready = true;
-            that._readyPromise.resolve(true);
+            that._hasWaterMask = that._hasWaterMask || hasWaterMask;
+            that._hasVertexNormals = that._hasVertexNormals || hasVertexNormals;
+            if (defined(data.attribution)) {
+                if (attribution.length > 0) {
+                    attribution += ' ';
+                }
+                attribution += data.attribution;
+            }
+
+            layers.push(new LayerInformation({
+                resource: lastResource,
+                version: data.version,
+                isHeightmap: isHeightmap,
+                tileUrlTemplates: tileUrlTemplates,
+                availability: availability,
+                hasVertexNormals: hasVertexNormals,
+                hasWaterMask: hasWaterMask,
+                littleEndianExtensionSize: littleEndianExtensionSize
+            }));
+
+            var parentUrl = data.parentUrl;
+            if (defined(parentUrl)) {
+                if (!defined(availability)) {
+                    console.log('A layer.json can\'t have a parentUrl if it does\'t have an available array.');
+                    return when.resolve();
+                }
+                lastResource = lastResource.getDerivedResource({
+                    url: parentUrl
+                });
+                lastResource.appendForwardSlash(); // Terrain always expects a directory
+                metadataResource = lastResource.getDerivedResource({
+                    url: 'layer.json'
+                });
+                var parentMetadata = metadataResource.fetchJson();
+                return when(parentMetadata, parseMetadataSuccess, parseMetadataFailure);
+            }
+
+            return when.resolve();
+        }
+
+        function parseMetadataFailure(data) {
+            var message = 'An error occurred while accessing ' + metadataResource.url + '.';
+            metadataError = TileProviderError.handleError(metadataError, that, that._errorEvent, message, undefined, undefined, undefined, requestMetadata);
+        }
+
+        function metadataSuccess(data) {
+            parseMetadataSuccess(data)
+                .then(function() {
+                    if (defined(metadataError)) {
+                        return;
+                    }
+
+                    var length = overallAvailability.length;
+                    if (length > 0) {
+                        var availability = that._availability = new TileAvailability(that._tilingScheme, length);
+                        for (var level = 0; level < length; ++level) {
+                            var levelRanges = overallAvailability[level];
+                            for (var i = 0; i < levelRanges.length; ++i) {
+                                var range = levelRanges[i];
+                                availability.addAvailableTileRange(level, range[0], range[1], range[2], range[3]);
+                            }
+                        }
+                    }
+
+                    if (!defined(that._credit) && attribution.length > 0) {
+                        that._credit = new Credit({text: attribution});
+                    }
+
+                    that._ready = true;
+                    that._readyPromise.resolve(true);
+                });
         }
 
         function metadataFailure(data) {
@@ -256,12 +339,11 @@ define([
                 });
                 return;
             }
-            var message = 'An error occurred while accessing ' + metadataUrl + '.';
-            metadataError = TileProviderError.handleError(metadataError, that, that._errorEvent, message, undefined, undefined, undefined, requestMetadata);
+            parseMetadataFailure(data);
         }
 
         function requestMetadata() {
-            var metadata = loadJson(metadataUrl);
+            var metadata = metadataResource.fetchJson();
             when(metadata, metadataSuccess, metadataFailure);
         }
 
@@ -300,12 +382,11 @@ define([
             return {
                 Accept : 'application/vnd.quantized-mesh,application/octet-stream;q=0.9,*/*;q=0.01'
             };
-        } else {
-            var extensions = extensionsList.join('-');
-            return {
-                Accept : 'application/vnd.quantized-mesh;extensions=' + extensions + ',application/octet-stream;q=0.9,*/*;q=0.01'
-            };
         }
+        var extensions = extensionsList.join('-');
+        return {
+            Accept : 'application/vnd.quantized-mesh;extensions=' + extensions + ',application/octet-stream;q=0.9,*/*;q=0.01'
+        };
     }
 
     function createHeightmapTerrainData(provider, buffer, level, x, y, tmsY) {
@@ -320,7 +401,7 @@ define([
         });
     }
 
-    function createQuantizedMeshTerrainData(provider, buffer, level, x, y, tmsY) {
+    function createQuantizedMeshTerrainData(provider, buffer, level, x, y, tmsY, littleEndianExtensionSize) {
         var pos = 0;
         var cartesian3Elements = 3;
         var boundingSphereElements = cartesian3Elements + 1;
@@ -365,24 +446,7 @@ define([
         var vBuffer = encodedVertexBuffer.subarray(vertexCount, 2 * vertexCount);
         var heightBuffer = encodedVertexBuffer.subarray(vertexCount * 2, 3 * vertexCount);
 
-        var i;
-        var u = 0;
-        var v = 0;
-        var height = 0;
-
-        function zigZagDecode(value) {
-            return (value >> 1) ^ (-(value & 1));
-        }
-
-        for (i = 0; i < vertexCount; ++i) {
-            u += zigZagDecode(uBuffer[i]);
-            v += zigZagDecode(vBuffer[i]);
-            height += zigZagDecode(heightBuffer[i]);
-
-            uBuffer[i] = u;
-            vBuffer[i] = v;
-            heightBuffer[i] = height;
-        }
+        AttributeCompression.zigZagDeltaDecode(uBuffer, vBuffer, heightBuffer);
 
         // skip over any additional padding that was added for 2/4 byte alignment
         if (pos % bytesPerIndex !== 0) {
@@ -398,7 +462,8 @@ define([
         // https://code.google.com/p/webgl-loader/source/browse/trunk/samples/loader.js?r=99#55
         // Copyright 2012 Google Inc., Apache 2.0 license.
         var highest = 0;
-        for (i = 0; i < indices.length; ++i) {
+        var length = indices.length;
+        for (var i = 0; i < length; ++i) {
             var code = indices[i];
             indices[i] = highest - code;
             if (code === 0) {
@@ -431,7 +496,7 @@ define([
         while (pos < view.byteLength) {
             var extensionId = view.getUint8(pos, true);
             pos += Uint8Array.BYTES_PER_ELEMENT;
-            var extensionLength = view.getUint32(pos, provider._littleEndianExtensionSize);
+            var extensionLength = view.getUint32(pos, littleEndianExtensionSize);
             pos += Uint32Array.BYTES_PER_ELEMENT;
 
             if (extensionId === QuantizedMeshExtensionIds.OCT_VERTEX_NORMALS && provider._requestVertexNormals) {
@@ -489,9 +554,8 @@ define([
      * @param {Number} x The X coordinate of the tile for which to request geometry.
      * @param {Number} y The Y coordinate of the tile for which to request geometry.
      * @param {Number} level The level of the tile for which to request geometry.
-     * @param {Boolean} [throttleRequests=true] True if the number of simultaneous requests should be limited,
-     *                  or false if the request should be initiated regardless of the number of requests
-     *                  already in progress.
+     * @param {Request} [request] The request object. Intended for internal use only.
+     *
      * @returns {Promise.<TerrainData>|undefined} A promise for the requested geometry.  If this method
      *          returns undefined instead of a promise, it is an indication that too many requests are already
      *          pending and the request will be retried later.
@@ -499,14 +563,34 @@ define([
      * @exception {DeveloperError} This function must not be called before {@link CesiumTerrainProvider#ready}
      *            returns true.
      */
-    CesiumTerrainProvider.prototype.requestTileGeometry = function(x, y, level, throttleRequests) {
+    CesiumTerrainProvider.prototype.requestTileGeometry = function(x, y, level, request) {
         //>>includeStart('debug', pragmas.debug)
         if (!this._ready) {
             throw new DeveloperError('requestTileGeometry must not be called before the terrain provider is ready.');
         }
         //>>includeEnd('debug');
 
-        var urlTemplates = this._tileUrlTemplates;
+        var layers = this._layers;
+        var layerToUse;
+        var layerCount = layers.length;
+
+        if (layerCount === 1) { // Optimized path for single layers
+            layerToUse = layers[0];
+        } else {
+            for (var i = 0; i < layerCount; ++i) {
+                var layer = layers[i];
+                if (!defined(layer.availability) || layer.availability.isTileAvailable(level, x, y)) {
+                    layerToUse = layer;
+                    break;
+                }
+            }
+        }
+
+        if (!defined(layerToUse)) {
+            return when.reject(new RuntimeError('Terrain tile doesn\'t exist'));
+        }
+
+        var urlTemplates = layerToUse.tileUrlTemplates;
         if (urlTemplates.length === 0) {
             return undefined;
         }
@@ -515,43 +599,38 @@ define([
 
         var tmsY = (yTiles - y - 1);
 
-        var url = urlTemplates[(x + tmsY + level) % urlTemplates.length].replace('{z}', level).replace('{x}', x).replace('{y}', tmsY);
-
-        var proxy = this._proxy;
-        if (defined(proxy)) {
-            url = proxy.getURL(url);
-        }
-
-        var promise;
-
         var extensionList = [];
-        if (this._requestVertexNormals && this._hasVertexNormals) {
-            extensionList.push(this._littleEndianExtensionSize ? 'octvertexnormals' : 'vertexnormals');
+        if (this._requestVertexNormals && layerToUse.hasVertexNormals) {
+            extensionList.push(layerToUse.littleEndianExtensionSize ? 'octvertexnormals' : 'vertexnormals');
         }
-        if (this._requestWaterMask && this._hasWaterMask) {
+        if (this._requestWaterMask && layerToUse.hasWaterMask) {
             extensionList.push('watermask');
         }
 
-        function tileLoader(tileUrl) {
-            return loadArrayBuffer(tileUrl, getRequestHeader(extensionList));
-        }
-        throttleRequests = defaultValue(throttleRequests, true);
-        if (throttleRequests) {
-            promise = throttleRequestByServer(url, tileLoader);
-            if (!defined(promise)) {
-                return undefined;
-            }
-        } else {
-            promise = tileLoader(url);
+        var resource = layerToUse.resource.getDerivedResource({
+            url: urlTemplates[(x + tmsY + level) % urlTemplates.length],
+            templateValues: {
+                version: layerToUse.version,
+                z: level,
+                x: x,
+                y: tmsY
+            },
+            headers: getRequestHeader(extensionList),
+            request: request
+        });
+
+        var promise = resource.fetchArrayBuffer();
+
+        if (!defined(promise)) {
+            return undefined;
         }
 
         var that = this;
         return when(promise, function(buffer) {
             if (defined(that._heightmapStructure)) {
                 return createHeightmapTerrainData(that, buffer, level, x, y, tmsY);
-            } else {
-                return createQuantizedMeshTerrainData(that, buffer, level, x, y, tmsY);
             }
+            return createQuantizedMeshTerrainData(that, buffer, level, x, y, tmsY, layerToUse.littleEndianExtensionSize);
         });
     };
 
@@ -734,10 +813,11 @@ define([
      * @returns {Boolean} Undefined if not supported, otherwise true or false.
      */
     CesiumTerrainProvider.prototype.getTileDataAvailable = function(x, y, level) {
-        if (!defined(this.availability)) {
+        if (!defined(this._availability)) {
             return undefined;
         }
-        return this.availability.isTileAvailable(level, x, y);
+
+        return this._availability.isTileAvailable(level, x, y);
     };
 
     return CesiumTerrainProvider;

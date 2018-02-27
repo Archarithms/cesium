@@ -1,10 +1,11 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/MapboxImageryProvider',
         'Core/DefaultProxy',
         'Core/loadImage',
         'Core/Math',
         'Core/Rectangle',
+        'Core/RequestScheduler',
+        'Core/Resource',
         'Core/WebMercatorTilingScheme',
         'Scene/Imagery',
         'Scene/ImageryLayer',
@@ -17,6 +18,8 @@ defineSuite([
         loadImage,
         CesiumMath,
         Rectangle,
+        RequestScheduler,
+        Resource,
         WebMercatorTilingScheme,
         Imagery,
         ImageryLayer,
@@ -24,6 +27,10 @@ defineSuite([
         ImageryState,
         pollToPromise) {
     'use strict';
+
+    beforeEach(function() {
+        RequestScheduler.clearForSpecs();
+    });
 
     afterEach(function() {
         loadImage.createImage = loadImage.defaultCreateImage;
@@ -42,6 +49,22 @@ defineSuite([
     it('resolves readyPromise', function() {
         var provider = new MapboxImageryProvider({
             url : 'made/up/mapbox/server/',
+            mapId: 'test-id'
+        });
+
+        return provider.readyPromise.then(function (result) {
+            expect(result).toBe(true);
+            expect(provider.ready).toBe(true);
+        });
+    });
+
+    it('resolves readyPromise with Resource', function() {
+        var resource = new Resource({
+            url : 'made/up/mapbox/server/'
+        });
+
+        var provider = new MapboxImageryProvider({
+            url : resource,
             mapId: 'test-id'
         });
 
@@ -250,6 +273,9 @@ defineSuite([
             if (tries < 3) {
                 error.retry = true;
             }
+            setTimeout(function() {
+                RequestScheduler.update();
+            }, 1);
         });
 
         loadImage.createImage = function(url, crossOrigin, deferred) {
@@ -270,6 +296,7 @@ defineSuite([
             var imagery = new Imagery(layer, 0, 0, 0);
             imagery.addReference();
             layer._requestImagery(imagery);
+            RequestScheduler.update();
 
             return pollToPromise(function() {
                 return imagery.state === ImageryState.RECEIVED;

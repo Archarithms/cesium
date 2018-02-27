@@ -1,10 +1,15 @@
-/*global defineSuite*/
 defineSuite([
         'Core/loadBlob',
-        'Core/RequestErrorEvent'
+        'Core/Request',
+        'Core/RequestErrorEvent',
+        'Core/RequestScheduler',
+        'Core/Resource'
     ], function(
         loadBlob,
-        RequestErrorEvent) {
+        Request,
+        RequestErrorEvent,
+        RequestScheduler,
+        Resource) {
     'use strict';
 
     var fakeXHR;
@@ -56,6 +61,24 @@ defineSuite([
             'Accept' : 'application/json',
             'Cache-Control' : 'no-cache'
         });
+
+        expect(fakeXHR.open).toHaveBeenCalledWith('GET', testUrl, true);
+        expect(fakeXHR.setRequestHeader.calls.count()).toEqual(2);
+        expect(fakeXHR.setRequestHeader).toHaveBeenCalledWith('Accept', 'application/json');
+        expect(fakeXHR.setRequestHeader).toHaveBeenCalledWith('Cache-Control', 'no-cache');
+        expect(fakeXHR.send).toHaveBeenCalled();
+    });
+
+    it('creates and sends request with custom headers with Resource', function() {
+        var testUrl = 'http://example.invalid/testuri';
+        var resource = new Resource({
+            url: testUrl,
+            headers: {
+                'Accept' : 'application/json',
+                'Cache-Control' : 'no-cache'
+            }
+        });
+        loadBlob(resource);
 
         expect(fakeXHR.open).toHaveBeenCalledWith('GET', testUrl, true);
         expect(fakeXHR.setRequestHeader.calls.count()).toEqual(2);
@@ -134,5 +157,20 @@ defineSuite([
         expect(rejectedError instanceof RequestErrorEvent).toBe(true);
         expect(rejectedError.statusCode).toEqual(404);
         expect(rejectedError.response).toEqual(error);
+    });
+
+    it('returns undefined if the request is throttled', function() {
+        var oldMaximumRequests = RequestScheduler.maximumRequests;
+        RequestScheduler.maximumRequests = 0;
+
+        var request = new Request({
+            throttle : true
+        });
+
+        var testUrl = 'http://example.invalid/testuri';
+        var promise = loadBlob(testUrl, undefined, request);
+        expect(promise).toBeUndefined();
+
+        RequestScheduler.maximumRequests = oldMaximumRequests;
     });
 });

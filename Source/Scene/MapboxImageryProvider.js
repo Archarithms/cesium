@@ -1,25 +1,34 @@
-/*global define*/
 define([
         '../Core/Credit',
         '../Core/defaultValue',
         '../Core/defined',
         '../Core/defineProperties',
+        '../Core/deprecationWarning',
         '../Core/DeveloperError',
         '../Core/MapboxApi',
+        '../Core/Resource',
         './UrlTemplateImageryProvider'
     ], function(
         Credit,
         defaultValue,
         defined,
         defineProperties,
+        deprecationWarning,
         DeveloperError,
         MapboxApi,
+        Resource,
         UrlTemplateImageryProvider) {
     'use strict';
 
     var trailingSlashRegex = /\/$/;
-    var defaultCredit1 = new Credit('© Mapbox © OpenStreetMap', undefined, 'https://www.mapbox.com/about/maps/');
-    var defaultCredit2 = [new Credit('Improve this map', undefined, 'https://www.mapbox.com/map-feedback/')];
+    var defaultCredit1 = new Credit({
+        text:'© Mapbox © OpenStreetMap',
+        link: 'https://www.mapbox.com/about/maps/'
+    });
+    var defaultCredit2 = [new Credit({
+        text: 'Improve this map',
+        link: 'https://www.mapbox.com/map-feedback/'
+    })];
 
     /**
      * Provides tiled imagery hosted by Mapbox.
@@ -32,7 +41,6 @@ define([
      * @param {String} options.mapId The Mapbox Map ID.
      * @param {String} [options.accessToken] The public access token for the imagery.
      * @param {String} [options.format='png'] The format of the image request.
-     * @param {Object} [options.proxy] A proxy to use for requests. This object is expected to have a getURL function which returns the proxied URL.
      * @param {Ellipsoid} [options.ellipsoid] The ellipsoid.  If not specified, the WGS84 ellipsoid is used.
      * @param {Number} [options.minimumLevel=0] The minimum level-of-detail supported by the imagery provider.  Take care when specifying
      *                 this that the number of tiles at the minimum level is small, such as four or less.  A larger number is likely
@@ -61,38 +69,53 @@ define([
         }
         //>>includeEnd('debug');
 
-        var url = defaultValue(options.url, 'https://api.mapbox.com/v4/');
+        if (defined(options.proxy)) {
+            deprecationWarning('MapboxImageryProvider.proxy', 'The options.proxy parameter has been deprecated. Specify options.url as a Resource instance and set the proxy property there.');
+        }
+
+        var url = options.url;
+        if (!defined(url)) {
+            url = 'https://api.mapbox.com/v4/';
+        }
         this._url = url;
+
+        var resource = Resource.createIfNeeded(url, {
+            proxy: options.proxy
+        });
+
+        var accessToken = MapboxApi.getAccessToken(options.accessToken);
         this._mapId = mapId;
-        this._accessToken = MapboxApi.getAccessToken(options.accessToken);
-        this._accessTokenErrorCredit = MapboxApi.getErrorCredit(options.key);
+        this._accessToken = accessToken;
+        this._accessTokenErrorCredit = MapboxApi.getErrorCredit(options.accessToken);
         var format = defaultValue(options.format, 'png');
         if (!/\./.test(format)) {
             format = '.' + format;
         }
         this._format = format;
 
-        var templateUrl = url;
-        if (!trailingSlashRegex.test(url)) {
+        var templateUrl = resource.getUrlComponent();
+        if (!trailingSlashRegex.test(templateUrl)) {
             templateUrl += '/';
         }
         templateUrl += mapId + '/{z}/{x}/{y}' + this._format;
-        if (defined(this._accessToken)) {
-            templateUrl += '?access_token=' + this._accessToken;
-        }
+        resource.url = templateUrl;
+
+        resource.addQueryParameters({
+            access_token: accessToken
+        });
 
         if (defined(options.credit)) {
             var credit = options.credit;
             if (typeof credit === 'string') {
-                credit = new Credit(credit);
+                credit = new Credit({text: credit});
             }
             defaultCredit1 = credit;
             defaultCredit2.length = 0;
         }
 
+        this._resource = resource;
         this._imageryProvider = new UrlTemplateImageryProvider({
-            url: templateUrl,
-            proxy: options.proxy,
+            url: resource,
             credit: defaultCredit1,
             ellipsoid: options.ellipsoid,
             minimumLevel: options.minimumLevel,
@@ -317,6 +340,7 @@ define([
      * @param {Number} x The tile X coordinate.
      * @param {Number} y The tile Y coordinate.
      * @param {Number} level The tile level.
+     * @param {Request} [request] The request object. Intended for internal use only.
      * @returns {Promise.<Image|Canvas>|undefined} A promise for the image that will resolve when the image is available, or
      *          undefined if there are too many active requests to the server, and the request
      *          should be retried later.  The resolved image may be either an
@@ -324,8 +348,8 @@ define([
      *
      * @exception {DeveloperError} <code>requestImage</code> must not be called before the imagery provider is ready.
      */
-    MapboxImageryProvider.prototype.requestImage = function(x, y, level) {
-        return this._imageryProvider.requestImage(x, y, level);
+    MapboxImageryProvider.prototype.requestImage = function(x, y, level, request) {
+        return this._imageryProvider.requestImage(x, y, level, request);
     };
 
     /**

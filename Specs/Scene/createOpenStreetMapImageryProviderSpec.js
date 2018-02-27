@@ -1,10 +1,11 @@
-/*global defineSuite*/
 defineSuite([
         'Scene/createOpenStreetMapImageryProvider',
         'Core/DefaultProxy',
         'Core/loadImage',
         'Core/Math',
         'Core/Rectangle',
+        'Core/RequestScheduler',
+        'Core/Resource',
         'Core/WebMercatorTilingScheme',
         'Scene/Imagery',
         'Scene/ImageryLayer',
@@ -17,6 +18,8 @@ defineSuite([
         loadImage,
         CesiumMath,
         Rectangle,
+        RequestScheduler,
+        Resource,
         WebMercatorTilingScheme,
         Imagery,
         ImageryLayer,
@@ -24,6 +27,10 @@ defineSuite([
         UrlTemplateImageryProvider,
         pollToPromise) {
     'use strict';
+
+    beforeEach(function() {
+        RequestScheduler.clearForSpecs();
+    });
 
     afterEach(function() {
         loadImage.createImage = loadImage.defaultCreateImage;
@@ -43,6 +50,32 @@ defineSuite([
             return provider.ready;
         }).then(function() {
             expect(typeof provider.hasAlphaChannel).toBe('boolean');
+        });
+    });
+
+    it('supports a Resource for the url', function() {
+        var resource = new Resource({
+            url : 'made/up/osm/server/'
+        });
+
+        var provider = createOpenStreetMapImageryProvider({
+            url : resource
+        });
+
+        return pollToPromise(function() {
+            return provider.ready;
+        }).then(function() {
+            spyOn(loadImage, 'createImage').and.callFake(function(url, crossOrigin, deferred) {
+                expect(url).not.toContain('//');
+
+                // Just return any old image.
+                loadImage.defaultCreateImage('Data/Images/Red16x16.png', crossOrigin, deferred);
+            });
+
+            return provider.requestImage(0, 0, 0).then(function(image) {
+                expect(loadImage.createImage).toHaveBeenCalled();
+                expect(image).toBeInstanceOf(Image);
+            });
         });
     });
 
@@ -223,6 +256,9 @@ defineSuite([
             if (tries < 3) {
                 error.retry = true;
             }
+            setTimeout(function() {
+                RequestScheduler.update();
+            }, 1);
         });
 
         loadImage.createImage = function(url, crossOrigin, deferred) {
@@ -243,6 +279,7 @@ defineSuite([
             var imagery = new Imagery(layer, 0, 0, 0);
             imagery.addReference();
             layer._requestImagery(imagery);
+            RequestScheduler.update();
 
             return pollToPromise(function() {
                 return imagery.state === ImageryState.RECEIVED;

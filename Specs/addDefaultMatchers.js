@@ -1,4 +1,3 @@
-/*global define*/
 define([
         './equals',
         'Core/Cartesian2',
@@ -262,18 +261,38 @@ define([
                 };
             },
 
-            toPickPrimitive : function(util, customEqualityTesters) {
+            toRenderPixelCountAndCall : function(util, customEqualityTesters) {
                 return {
                     compare : function(actual, expected) {
-                        return pickPrimitiveEquals(actual, expected);
+                        var actualRgba = renderAndReadPixels(actual);
+
+                        var webglStub = !!window.webglStub;
+                        if (!webglStub) {
+                            // The callback may have expectations that fail, which still makes the
+                            // spec fail, as we desired, even though this matcher sets pass to true.
+                            var callback = expected;
+                            callback(countRenderedPixels(actualRgba));
+                        }
+
+                        return {
+                            pass : true
+                        };
+                    }
+                };
+            },
+
+            toPickPrimitive : function(util, customEqualityTesters) {
+                return {
+                    compare : function(actual, expected, x, y, width, height) {
+                        return pickPrimitiveEquals(actual, expected, x, y, width, height);
                     }
                 };
             },
 
             notToPick : function(util, customEqualityTesters) {
                 return {
-                    compare : function(actual, expected) {
-                        return pickPrimitiveEquals(actual, undefined);
+                    compare : function(actual, expected, x, y, width, height) {
+                        return pickPrimitiveEquals(actual, undefined, x, y, width, height);
                     }
                 };
             },
@@ -413,8 +432,25 @@ define([
 
             toThrowDeveloperError : makeThrowFunction(debug, DeveloperError, 'DeveloperError'),
 
-            toThrowRuntimeError : makeThrowFunction(true, RuntimeError, 'RuntimeError')
+            toThrowRuntimeError : makeThrowFunction(true, RuntimeError, 'RuntimeError'),
+
+            toThrowSyntaxError : makeThrowFunction(true, SyntaxError, 'SyntaxError')
         };
+    }
+
+    function countRenderedPixels(rgba) {
+        var pixelCount = rgba.length / 4;
+        var count = 0;
+        for (var i = 0; i < pixelCount; i++) {
+            var index = i * 4;
+            if (rgba[index] !== 0 ||
+                rgba[index + 1] !== 0 ||
+                rgba[index + 2] !== 0 ||
+                rgba[index + 3] !== 255) {
+                count++;
+            }
+        }
+        return count;
     }
 
     function renderAndReadPixels(options) {
@@ -466,9 +502,10 @@ define([
         };
     }
 
-    function pickPrimitiveEquals(actual, expected) {
+    function pickPrimitiveEquals(actual, expected, x, y, width, height) {
         var scene = actual;
-        var result = scene.pick(new Cartesian2(0, 0));
+        var windowPosition = new Cartesian2(x, y);
+        var result = scene.pick(windowPosition, width, height);
 
         if (!!window.webglStub) {
             return {
@@ -594,16 +631,14 @@ define([
                         message : 'Expected context to render ' + expected + ', but rendered: ' + rgba
                     };
                 }
-            } else {
-                if (CesiumMath.equalsEpsilon(rgba[0], expected[0], 0, epsilon) &&
-                    CesiumMath.equalsEpsilon(rgba[1], expected[1], 0, epsilon) &&
-                    CesiumMath.equalsEpsilon(rgba[2], expected[2], 0, epsilon) &&
-                    CesiumMath.equalsEpsilon(rgba[3], expected[3], 0, epsilon)) {
-                    return {
-                        pass : false,
-                        message : 'Expected context not to render ' + expected + ', but rendered: ' + rgba
-                    };
-                }
+            } else if (CesiumMath.equalsEpsilon(rgba[0], expected[0], 0, epsilon) &&
+                CesiumMath.equalsEpsilon(rgba[1], expected[1], 0, epsilon) &&
+                CesiumMath.equalsEpsilon(rgba[2], expected[2], 0, epsilon) &&
+                CesiumMath.equalsEpsilon(rgba[3], expected[3], 0, epsilon)) {
+                return {
+                    pass : false,
+                    message : 'Expected context not to render ' + expected + ', but rendered: ' + rgba
+                };
             }
         }
 

@@ -1,18 +1,41 @@
-/*global defineSuite*/
 defineSuite([
         'Core/loadWithXhr',
         'Core/loadImage',
-        'Core/RequestErrorEvent'
+        'Core/Request',
+        'Core/RequestErrorEvent',
+        'Core/RequestScheduler',
+        'Core/Resource'
     ], function(
         loadWithXhr,
         loadImage,
-        RequestErrorEvent) {
+        Request,
+        RequestErrorEvent,
+        RequestScheduler,
+        Resource) {
     'use strict';
 
     it('throws with no url', function() {
         expect(function() {
             loadWithXhr();
         }).toThrowDeveloperError();
+    });
+
+    it('returns undefined if the request is throttled', function() {
+        var oldMaximumRequests = RequestScheduler.maximumRequests;
+        RequestScheduler.maximumRequests = 0;
+
+        var request = new Request({
+            throttle : true
+        });
+
+        var testUrl = 'http://example.invalid/testuri';
+        var promise = loadWithXhr({
+            url : testUrl,
+            request : request
+        });
+        expect(promise).toBeUndefined();
+
+        RequestScheduler.maximumRequests = oldMaximumRequests;
     });
 
     describe('data URI loading', function() {
@@ -221,7 +244,7 @@ defineSuite([
                     fakeXHR.onerror();
                 }
             };
-            fakeXHR.simulateHttpError = function(statusCode, response) {
+            fakeXHR.simulateHttpResponse = function(statusCode, response) {
                 fakeXHR.status = statusCode;
                 fakeXHR.response = response;
                 if (typeof fakeXHR.onload === 'function') {
@@ -236,11 +259,7 @@ defineSuite([
                 }
             };
             fakeXHR.simulateResponseTextLoad = function(responseText) {
-                fakeXHR.status = 200;
-                fakeXHR.responseText = responseText;
-                if (typeof fakeXHR.onload === 'function') {
-                    fakeXHR.onload();
-                }
+                fakeXHR.simulateHttpResponse(200, responseText);
             };
 
             spyOn(window, 'XMLHttpRequest').and.returnValue(fakeXHR);
@@ -288,9 +307,35 @@ defineSuite([
                 expect(resolvedValue).toBeUndefined();
                 expect(rejectedError).toBeUndefined();
 
-                fakeXHR.simulateHttpError(199);
+                fakeXHR.simulateHttpResponse(199);
                 expect(resolvedValue).toBeUndefined();
                 expect(rejectedError instanceof RequestErrorEvent).toBe(true);
+            });
+
+            it('resolves undefined for status code 204', function() {
+                var promise = loadWithXhr({
+                    url : 'http://example.invalid'
+                });
+
+                expect(promise).toBeDefined();
+
+                var resolved = false;
+                var resolvedValue;
+                var rejectedError;
+                promise.then(function(value) {
+                    resolved = true;
+                    resolvedValue = value;
+                }).otherwise(function (error) {
+                    rejectedError = error;
+                });
+
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
+
+                fakeXHR.simulateHttpResponse(204);
+                expect(resolved).toBe(true);
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
             });
         });
 
@@ -396,6 +441,121 @@ defineSuite([
                 var responseText = 'hello world';
                 fakeXHR.simulateResponseTextLoad(responseText);
                 expect(resolvedValue).toEqual(responseText);
+                expect(rejectedError).toBeUndefined();
+            });
+        });
+
+        describe('retries when Resource has the callback set', function() {
+            it('rejects after too many retries', function() {
+                var cb = jasmine.createSpy('retry').and.returnValue(true);
+
+                var resource = new Resource({
+                    url : 'http://example.invalid',
+                    retryCallback: cb,
+                    retryAttempts: 1
+                });
+
+                var promise = loadWithXhr(resource);
+
+                expect(promise).toBeDefined();
+
+                var resolvedValue;
+                var rejectedError;
+                promise.then(function(value) {
+                    resolvedValue = value;
+                }).otherwise(function (error) {
+                    rejectedError = error;
+                });
+
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
+
+                fakeXHR.simulateError(); // This should retry
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
+
+                expect(cb.calls.count()).toEqual(1);
+                var receivedResource = cb.calls.argsFor(0)[0];
+                expect(receivedResource.url).toEqual(resource.url);
+                expect(receivedResource._retryCount).toEqual(1);
+                expect(cb.calls.argsFor(0)[1] instanceof RequestErrorEvent).toBe(true);
+
+                fakeXHR.simulateError(); // This fails because we only retry once
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError instanceof RequestErrorEvent).toBe(true);
+            });
+
+            it('rejects after callback returns false', function() {
+                var cb = jasmine.createSpy('retry').and.returnValue(false);
+
+                var resource = new Resource({
+                    url : 'http://example.invalid',
+                    retryCallback: cb,
+                    retryAttempts: 2
+                });
+
+                var promise = loadWithXhr(resource);
+
+                expect(promise).toBeDefined();
+
+                var resolvedValue;
+                var rejectedError;
+                promise.then(function(value) {
+                    resolvedValue = value;
+                }).otherwise(function (error) {
+                    rejectedError = error;
+                });
+
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
+
+                fakeXHR.simulateError(); // This fails because the callback returns false
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError instanceof RequestErrorEvent).toBe(true);
+
+                expect(cb.calls.count()).toEqual(1);
+                var receivedResource = cb.calls.argsFor(0)[0];
+                expect(receivedResource.url).toEqual(resource.url);
+                expect(receivedResource._retryCount).toEqual(1);
+                expect(cb.calls.argsFor(0)[1] instanceof RequestErrorEvent).toBe(true);
+            });
+
+            it('resolves after retry', function() {
+                var cb = jasmine.createSpy('retry').and.returnValue(true);
+
+                var resource = new Resource({
+                    url : 'http://example.invalid',
+                    retryCallback: cb,
+                    retryAttempts: 1
+                });
+
+                var promise = loadWithXhr(resource);
+
+                expect(promise).toBeDefined();
+
+                var resolvedValue;
+                var rejectedError;
+                promise.then(function(value) {
+                    resolvedValue = value;
+                }).otherwise(function (error) {
+                    rejectedError = error;
+                });
+
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
+
+                fakeXHR.simulateError(); // This should retry
+                expect(resolvedValue).toBeUndefined();
+                expect(rejectedError).toBeUndefined();
+
+                expect(cb.calls.count()).toEqual(1);
+                var receivedResource = cb.calls.argsFor(0)[0];
+                expect(receivedResource.url).toEqual(resource.url);
+                expect(receivedResource._retryCount).toEqual(1);
+                expect(cb.calls.argsFor(0)[1] instanceof RequestErrorEvent).toBe(true);
+
+                fakeXHR.simulateHttpResponse(200, 'OK');
+                expect(resolvedValue).toBeDefined();
                 expect(rejectedError).toBeUndefined();
             });
         });

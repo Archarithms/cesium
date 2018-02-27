@@ -1,22 +1,28 @@
-/*global define*/
 define([
+        '../Core/appendForwardSlash',
         '../Core/Credit',
         '../Core/defaultValue',
+        '../Core/defined',
+        '../Core/deprecationWarning',
         '../Core/DeveloperError',
         '../Core/Rectangle',
+        '../Core/Resource',
         '../Core/WebMercatorTilingScheme',
         './UrlTemplateImageryProvider'
     ], function(
+        appendForwardSlash,
         Credit,
         defaultValue,
+        defined,
+        deprecationWarning,
         DeveloperError,
         Rectangle,
+        Resource,
         WebMercatorTilingScheme,
         UrlTemplateImageryProvider) {
     'use strict';
 
-    var trailingSlashRegex = /\/$/;
-    var defaultCredit = new Credit('MapQuest, Open Street Map and contributors, CC-BY-SA');
+    var defaultCredit = new Credit({text: 'MapQuest, Open Street Map and contributors, CC-BY-SA'});
 
     /**
      * Creates a {@link UrlTemplateImageryProvider} instance that provides tiled imagery hosted by OpenStreetMap
@@ -29,7 +35,6 @@ define([
      * @param {Object} [options] Object with the following properties:
      * @param {String} [options.url='https://a.tile.openstreetmap.org'] The OpenStreetMap server url.
      * @param {String} [options.fileExtension='png'] The file extension for images on the server.
-     * @param {Object} [options.proxy] A proxy to use for requests. This object is expected to have a getURL function which returns the proxied URL.
      * @param {Rectangle} [options.rectangle=Rectangle.MAX_VALUE] The rectangle of the layer.
      * @param {Number} [options.minimumLevel=0] The minimum level-of-detail supported by the imagery provider.
      * @param {Number} [options.maximumLevel] The maximum level-of-detail supported by the imagery provider, or undefined if there is no limit.
@@ -41,7 +46,7 @@ define([
      *
      * @see ArcGisMapServerImageryProvider
      * @see BingMapsImageryProvider
-     * @see GoogleEarthImageryProvider
+     * @see GoogleEarthEnterpriseMapsProvider
      * @see SingleTileImageryProvider
      * @see createTileMapServiceImageryProvider
      * @see WebMapServiceImageryProvider
@@ -61,12 +66,16 @@ define([
         options = defaultValue(options, {});
 
         var url = defaultValue(options.url, 'https://a.tile.openstreetmap.org/');
+        url = appendForwardSlash(url);
+        url += '{z}/{x}/{y}.' + defaultValue(options.fileExtension, 'png');
 
-        if (!trailingSlashRegex.test(url)) {
-            url = url + '/';
+        if (defined(options.proxy)) {
+            deprecationWarning('createOpenStreetMapImageryProvider.proxy', 'The options.proxy parameter has been deprecated. Specify options.url as a Resource instance and set the proxy property there.');
         }
 
-        var fileExtension = defaultValue(options.fileExtension, 'png');
+        var resource = Resource.createIfNeeded(url, {
+            proxy: options.proxy
+        });
 
         var tilingScheme = new WebMercatorTilingScheme({ ellipsoid : options.ellipsoid });
 
@@ -92,14 +101,11 @@ define([
 
         var credit = defaultValue(options.credit, defaultCredit);
         if (typeof credit === 'string') {
-            credit = new Credit(credit);
+            credit = new Credit({text: credit});
         }
 
-        var templateUrl = url + "{z}/{x}/{y}." + fileExtension;
-
         return new UrlTemplateImageryProvider({
-            url: templateUrl,
-            proxy: options.proxy,
+            url: resource,
             credit: credit,
             tilingScheme: tilingScheme,
             tileWidth: tileWidth,

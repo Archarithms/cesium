@@ -1,10 +1,15 @@
-/*global defineSuite*/
 defineSuite([
         'Core/loadArrayBuffer',
-        'Core/RequestErrorEvent'
+        'Core/Request',
+        'Core/RequestErrorEvent',
+        'Core/RequestScheduler',
+        'Core/Resource'
     ], function(
         loadArrayBuffer,
-        RequestErrorEvent) {
+        Request,
+        RequestErrorEvent,
+        RequestScheduler,
+        Resource) {
     'use strict';
 
     var fakeXHR;
@@ -87,6 +92,31 @@ defineSuite([
         expect(rejectedError).toBeUndefined();
     });
 
+    it('returns a promise that resolves when the request loads with Resource', function() {
+        var testUrl = 'http://example.invalid/testuri';
+        var promise = loadArrayBuffer(new Resource({
+            url: testUrl
+        }));
+
+        expect(promise).toBeDefined();
+
+        var resolvedValue;
+        var rejectedError;
+        promise.then(function(value) {
+            resolvedValue = value;
+        }, function(error) {
+            rejectedError = error;
+        });
+
+        expect(resolvedValue).toBeUndefined();
+        expect(rejectedError).toBeUndefined();
+
+        var response = 'some response';
+        fakeXHR.simulateLoad(response);
+        expect(resolvedValue).toEqual(response);
+        expect(rejectedError).toBeUndefined();
+    });
+
     it('returns a promise that rejects when the request errors', function() {
         var testUrl = 'http://example.invalid/testuri';
         var promise = loadArrayBuffer(testUrl);
@@ -134,5 +164,20 @@ defineSuite([
         expect(rejectedError instanceof RequestErrorEvent).toBe(true);
         expect(rejectedError.statusCode).toEqual(404);
         expect(rejectedError.response).toEqual(error);
+    });
+
+    it('returns undefined if the request is throttled', function() {
+        var oldMaximumRequests = RequestScheduler.maximumRequests;
+        RequestScheduler.maximumRequests = 0;
+
+        var request = new Request({
+            throttle : true
+        });
+
+        var testUrl = 'http://example.invalid/testuri';
+        var promise = loadArrayBuffer(testUrl, undefined, request);
+        expect(promise).toBeUndefined();
+
+        RequestScheduler.maximumRequests = oldMaximumRequests;
     });
 });

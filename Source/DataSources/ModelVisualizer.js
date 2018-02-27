@@ -1,4 +1,3 @@
-/*global define*/
 define([
         '../Core/AssociativeArray',
         '../Core/BoundingSphere',
@@ -7,6 +6,7 @@ define([
         '../Core/destroyObject',
         '../Core/DeveloperError',
         '../Core/Matrix4',
+        '../Core/Resource',
         '../Scene/ColorBlendMode',
         '../Scene/HeightReference',
         '../Scene/Model',
@@ -22,6 +22,7 @@ define([
         destroyObject,
         DeveloperError,
         Matrix4,
+        Resource,
         ColorBlendMode,
         HeightReference,
         Model,
@@ -34,6 +35,7 @@ define([
     var defaultScale = 1.0;
     var defaultMinimumPixelSize = 0.0;
     var defaultIncrementallyLoadTextures = true;
+    var defaultClampAnimations = true;
     var defaultShadows = ShadowMode.ENABLED;
     var defaultHeightReference = HeightReference.NONE;
     var defaultSilhouetteColor = Color.RED;
@@ -95,15 +97,15 @@ define([
             var entity = entities[i];
             var modelGraphics = entity._model;
 
-            var uri;
+            var resource;
             var modelData = modelHash[entity.id];
             var show = entity.isShowing && entity.isAvailable(time) && Property.getValueOrDefault(modelGraphics._show, time, true);
 
             var modelMatrix;
             if (show) {
-                modelMatrix = entity._getModelMatrix(time, modelMatrixScratch);
-                uri = Property.getValueOrUndefined(modelGraphics._uri, time);
-                show = defined(modelMatrix) && defined(uri);
+                modelMatrix = entity.computeModelMatrix(time, modelMatrixScratch);
+                resource = Resource.createIfNeeded(Property.getValueOrUndefined(modelGraphics._uri, time));
+                show = defined(modelMatrix) && defined(resource);
             }
 
             if (!show) {
@@ -114,13 +116,13 @@ define([
             }
 
             var model = defined(modelData) ? modelData.modelPrimitive : undefined;
-            if (!defined(model) || uri !== modelData.uri) {
+            if (!defined(model) || resource.url !== modelData.url) {
                 if (defined(model)) {
                     primitives.removeAndDestroy(model);
                     delete modelHash[entity.id];
                 }
                 model = Model.fromGltf({
-                    url : uri,
+                    url : resource,
                     incrementallyLoadTextures : Property.getValueOrDefault(modelGraphics._incrementallyLoadTextures, time, defaultIncrementallyLoadTextures),
                     scene : this._scene
                 });
@@ -132,7 +134,7 @@ define([
 
                 modelData = {
                     modelPrimitive : model,
-                    uri : uri,
+                    url : resource.url,
                     animationsRunning : false,
                     nodeTransformationsScratch : {},
                     originalNodeMatrixHash : {}
@@ -153,6 +155,8 @@ define([
             model.color = Property.getValueOrDefault(modelGraphics._color, time, defaultColor, model._color);
             model.colorBlendMode = Property.getValueOrDefault(modelGraphics._colorBlendMode, time, defaultColorBlendMode);
             model.colorBlendAmount = Property.getValueOrDefault(modelGraphics._colorBlendAmount, time, defaultColorBlendAmount);
+            model.clippingPlanes = Property.getValueOrUndefined(modelGraphics._clippingPlanes, time);
+            model.clampAnimations = Property.getValueOrDefault(modelGraphics._clampAnimations, time, defaultClampAnimations);
 
             if (model.ready) {
                 var runAnimations = Property.getValueOrDefault(modelGraphics._runAnimations, time, true);
